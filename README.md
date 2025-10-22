@@ -618,16 +618,153 @@ tensorboard --logdir results/cnn_lstm/tensorboard
 
 ---
 
+## 🧠 深層学習モデル（Attention-LSTM）
+
+### モデルアーキテクチャ
+
+**Attention機構付きLSTMモデル**を実装し、CNN-LSTMと同じ条件で全データセット訓練を実施しました。
+
+#### 構成:
+- **入力**: 8チャンネル × 200時間ステップ
+- **LSTM**: 双方向2層（隠れ層サイズ128）
+- **Attention機構**:
+  - Linear(256 → 128) → Tanh → Linear(128 → 1)
+  - ソフトマックスで重み計算
+  - 重み付き和で文脈ベクトル生成
+- **全結合層**: 256 → 128 → 6クラス
+- **パラメータ数**: 669,063個（CNN-LSTMより少ない）
+- **デバイス**: NVIDIA GeForce RTX 5090 (CUDA 12.8)
+
+### 訓練設定
+
+```bash
+python train_deep_learning.py --model_type attention_lstm --epochs 50 --batch_size 64 --lr 0.001
+```
+
+- **エポック数**: 50
+- **バッチサイズ**: 64
+- **最適化手法**: Adam (lr=0.001, weight_decay=1e-4)
+- **損失関数**: CrossEntropyLoss（クラスウェイト付き）
+- **学習率スケジューラ**: ReduceLROnPlateau
+- **データ分割**: CNN-LSTMと同一
+
+### 訓練結果
+
+#### 最終精度
+- **検証精度**: 70.15% (Epoch 2で達成)
+- **テスト精度**: 72.08%
+
+#### 訓練曲線
+![Training Curves](results/attention_lstm/training_curves.png)
+
+**観察された現象**:
+- Epoch 1: 訓練精度27.28%、検証精度4.27%
+- Epoch 2: 検証精度が70.15%に急上昇（ベストモデル）
+- Epoch 3以降: 検証精度が3-4%に急落
+- 訓練精度は42-46%で停滞
+- **CNN-LSTMと全く同じ多数派クラス予測パターン**
+
+---
+
+### ⚠️ **Attention-LSTMも同じ問題を再現**
+
+#### テストセット分類レポート
+
+```
+Classification Report (Test Set):
+              precision    recall  f1-score   support
+
+  No Gesture       0.72      1.00      0.84      5603
+        Fist       0.00      0.00      0.00       258
+     Wave In       0.00      0.00      0.00       149
+    Wave Out       0.00      0.00      0.00      1493
+        Open       0.00      0.00      0.00       270
+
+    accuracy                           0.72      7773
+   macro avg       0.14      0.20      0.17      7773
+weighted avg       0.52      0.72      0.60      7773
+```
+
+#### 検証セット分類レポート
+
+```
+Classification Report (Validation Set):
+              precision    recall  f1-score   support
+
+  No Gesture       0.70      1.00      0.82      1100
+        Fist       0.00      0.00      0.00        42
+     Wave In       0.00      0.00      0.00        61
+    Wave Out       0.00      0.00      0.00       298
+        Open       0.00      0.00      0.00        67
+
+    accuracy                           0.70      1568
+   macro avg       0.14      0.20      0.16      1568
+weighted avg       0.49      0.70      0.58      1568
+```
+
+#### 混同行列
+![Confusion Matrix - Test](results/attention_lstm/confusion_matrix_test.png)
+![Confusion Matrix - Validation](results/attention_lstm/confusion_matrix_validation.png)
+
+---
+
+### 📊 CNN-LSTM vs Attention-LSTM 比較
+
+| 指標 | CNN-LSTM | Attention-LSTM | 差異 |
+|------|----------|----------------|------|
+| **パラメータ数** | 791,078 | 669,063 | -15.4% |
+| **テスト精度** | 72.08% | 72.08% | 同一 |
+| **検証精度（ベスト）** | 70.15% | 70.15% | 同一 |
+| **マクロF1（テスト）** | 0.17 | 0.17 | 同一 |
+| **重みF1（テスト）** | 0.60 | 0.60 | 同一 |
+| **No Gesture Recall** | 1.00 | 1.00 | 同一 |
+| **他クラスRecall** | 0.00 | 0.00 | 同一 |
+
+### 📝 重要な結論
+
+**モデルアーキテクチャは根本原因ではない**:
+- CNN-LSTMとAttention-LSTM、どちらも全く同じ結果
+- 両モデルとも「すべてNo Gesture」と予測する戦略に収束
+- Attentionメカニズムも役に立たない
+
+**真の原因はデータの極端な不均衡**:
+- No Gesture: 70.4%
+- その他: 各2-20%
+- Pinch: 0.0% (1サンプル)
+
+**アーキテクチャ改善だけでは解決不可**:
+- より複雑なモデル（Transformer等）も同じ問題に直面すると予想される
+- **データレベルの対策が絶対必要**（SMOTE、リサンプリング、Focal Loss等）
+
+---
+
+### 📁 保存されたファイル（Attention-LSTM）
+
+```
+results/attention_lstm/
+├── best_model.pth                    # ベストモデル（Epoch 2）
+├── training_curves.png               # 訓練・検証の損失/精度曲線
+├── confusion_matrix_validation.png   # 検証セット混同行列
+├── confusion_matrix_test.png         # テストセット混同行列
+└── tensorboard/                      # TensorBoardログ
+```
+
+---
+
 ### 🎯 今後の方向性
 
-**現状**: モデルは多数派クラス予測に陥っており、実用的なジェスチャー認識は不可能
+**現状**: CNN-LSTM、Attention-LSTMともに多数派クラス予測に陥っており、実用的なジェスチャー認識は不可能
+
+**重要な教訓**:
+- アーキテクチャの改善だけではクラス不均衡問題は解決しない
+- 2つの異なるモデルが同一の失敗パターンを示すことで、データの問題が明確に
 
 **次のステップ**:
 1. **最優先**: リサンプリング戦略の実装（SMOTE + アンダーサンプリング）
 2. Focal Lossへの変更
 3. データ拡張の大幅強化
 4. Pinchクラスの除外（5クラス分類への変更）
-5. モデルアーキテクチャの見直し（Attention機構の追加等）
+5. ~~モデルアーキテクチャの見直し~~ ← 優先度低（データ対策後に検討）
 
 **目標精度**:
 - 単純な精度: 70-80%（現在72%だが無意味）
