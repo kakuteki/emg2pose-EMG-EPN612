@@ -146,8 +146,9 @@ class BaselineModelTrainer:
         print(f"  F1 Score:  {f1:.4f}")
 
         print(f"\nPer-Class Metrics:")
-        for i in range(len(self.class_names)):
-            print(f"  {self.class_names[i]}:")
+        for i in range(len(precision_per_class)):
+            class_name = self.class_names[i] if i < len(self.class_names) else f"Class_{i}"
+            print(f"  {class_name}:")
             print(f"    Precision: {precision_per_class[i]:.4f}")
             print(f"    Recall:    {recall_per_class[i]:.4f}")
             print(f"    F1 Score:  {f1_per_class[i]:.4f}")
@@ -155,8 +156,12 @@ class BaselineModelTrainer:
 
         # 詳細なクラシフィケーションレポート
         print(f"\nClassification Report:")
+        # 実際に存在するクラスのラベルのみを使用
+        unique_labels = np.unique(np.concatenate([y_test, y_pred]))
+        label_names = [self.class_names[i] for i in unique_labels if i < len(self.class_names)]
         print(classification_report(y_test, y_pred,
-                                   target_names=self.class_names,
+                                   labels=unique_labels,
+                                   target_names=label_names,
                                    zero_division=0))
 
         # メトリクスを辞書にまとめる

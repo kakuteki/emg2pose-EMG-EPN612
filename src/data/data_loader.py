@@ -196,11 +196,21 @@ def create_data_split(X: np.ndarray, y: np.ndarray,
     """
     from sklearn.model_selection import train_test_split
 
+    # Check if stratified split is possible (all classes must have >= 2 samples)
+    unique, counts = np.unique(y, return_counts=True)
+    min_samples = counts.min()
+
+    if min_samples < 2:
+        print(f"Warning: Some classes have < 2 samples (min={min_samples}). Using non-stratified split.")
+        stratify_param = None
+    else:
+        stratify_param = y  # 層化サンプリング
+
     X_train, X_val, y_train, y_val = train_test_split(
         X, y,
         test_size=test_size,
         random_state=random_state,
-        stratify=y  # 層化サンプリング
+        stratify=stratify_param
     )
 
     return X_train, X_val, y_train, y_val

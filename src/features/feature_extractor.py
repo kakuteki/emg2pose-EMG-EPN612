@@ -189,7 +189,7 @@ class EMGPreprocessor:
 
     def bandpass_filter(self, emg_signal: np.ndarray,
                        lowcut: float = 20.0,
-                       highcut: float = 450.0,
+                       highcut: float = 90.0,
                        order: int = 4) -> np.ndarray:
         """
         バンドパスフィルタを適用

@@ -355,6 +355,288 @@ python train_baseline.py --data_path . --max_users 20 --model_type random_forest
 
 ---
 
+## 🧠 深層学習モデル（CNN-LSTM）
+
+### モデルアーキテクチャ
+
+**CNN-LSTMハイブリッドモデル**を実装し、全データセット（306ユーザー、7,836訓練サンプル）でGPU訓練を実施しました。
+
+#### 構成:
+- **入力**: 8チャンネル × 200時間ステップ
+- **CNNブロック**: 3層（32→64→128フィルタ）
+  - 各層: Conv1D → BatchNorm → ReLU → MaxPool → Dropout
+- **LSTM**: 双方向2層（隠れ層サイズ128）
+- **全結合層**: 256 → 128 → 6クラス
+- **パラメータ数**: 791,078個
+- **デバイス**: NVIDIA GeForce RTX 5090 (CUDA 12.8)
+
+### 訓練設定
+
+```bash
+python train_deep_learning.py --model_type cnn_lstm --epochs 50 --batch_size 64 --lr 0.001
+```
+
+- **エポック数**: 50
+- **バッチサイズ**: 64
+- **最適化手法**: Adam (lr=0.001, weight_decay=1e-4)
+- **損失関数**: CrossEntropyLoss（クラスウェイト付き）
+- **学習率スケジューラ**: ReduceLROnPlateau
+- **データ分割**:
+  - 訓練: 6,268サンプル
+  - 検証: 1,568サンプル
+  - テスト: 7,773サンプル
+
+### 訓練結果
+
+#### 最終精度
+- **検証精度**: 70.15% (Epoch 2で達成)
+- **テスト精度**: 72.08%
+
+#### 訓練曲線
+![Training Curves](results/cnn_lstm/training_curves.png)
+
+**観察された現象**:
+- Epoch 1-2: 検証精度が70%に急上昇
+- Epoch 3以降: 検証精度が3-5%に急落し、その後も低迷
+- 訓練精度は47.88%まで緩やかに上昇
+- 明らかな**過学習**の兆候
+
+---
+
+### ⚠️ **重大な問題: モデルは実質的にジェスチャーを認識していない**
+
+#### テストセット分類レポート
+
+```
+Classification Report (Test Set):
+              precision    recall  f1-score   support
+
+  No Gesture       0.72      1.00      0.84      5603
+        Fist       0.00      0.00      0.00       258
+     Wave In       0.00      0.00      0.00       149
+    Wave Out       0.00      0.00      0.00      1493
+        Open       0.00      0.00      0.00       270
+
+    accuracy                           0.72      7773
+   macro avg       0.14      0.20      0.17      7773
+weighted avg       0.52      0.72      0.60      7773
+```
+
+#### 検証セット分類レポート
+
+```
+Classification Report (Validation Set):
+              precision    recall  f1-score   support
+
+  No Gesture       0.70      1.00      0.82      1100
+        Fist       0.00      0.00      0.00        42
+     Wave In       0.00      0.00      0.00        61
+    Wave Out       0.00      0.00      0.00       298
+        Open       0.00      0.00      0.00        67
+
+    accuracy                           0.70      1568
+   macro avg       0.14      0.20      0.16      1568
+weighted avg       0.49      0.70      0.58      1568
+```
+
+#### 混同行列
+![Confusion Matrix - Test](results/cnn_lstm/confusion_matrix_test.png)
+![Confusion Matrix - Validation](results/cnn_lstm/confusion_matrix_validation.png)
+
+---
+
+### 📊 問題分析
+
+#### 1. **多数派クラス予測（Majority Class Prediction）**
+
+モデルは**すべてのサンプルを「No Gesture」クラスに分類**しています：
+
+- **No Gesture**: Recall = 1.00（すべてのサンプルをNo Gestureと予測）
+- **その他のジェスチャー**: Recall = 0.00（全く認識できていない）
+
+#### 2. **見かけ上の高精度の落とし穴**
+
+72.08%という精度は一見良好に見えますが、これは：
+- テストセットの72.1%がNo Gestureであるため
+- 単純に「すべてNo Gesture」と予測しているだけ
+- **実用的なジェスチャー認識モデルとしては完全に機能していない**
+
+#### 3. **根本原因**
+
+##### a) **極端なクラス不均衡**
+```
+訓練セット:
+  No Gesture: 70.4% (5,514サンプル)
+  Fist:        2.8% (221サンプル)
+  Wave In:     3.1% (240サンプル)
+  Wave Out:   19.4% (1,524サンプル)
+  Open:        4.3% (336サンプル)
+  Pinch:       0.0% (1サンプル)  ← 極端に少ない
+```
+
+##### b) **クラスウェイトの限界**
+- CrossEntropyLossにクラスウェイトを適用したが不十分
+- 重み付けだけでは70:30や80:20のような極端な不均衡には対処しきれない
+
+##### c) **過学習の進行**
+- Epoch 2以降、検証精度が急落
+- モデルは訓練データの多数派クラスに特化してしまった
+
+---
+
+### 🔧 改善策
+
+#### 1. **データレベルの対策**
+
+##### a) リサンプリング
+```python
+# アンダーサンプリング: No Gestureクラスを削減
+# オーバーサンプリング: マイノリティクラスを増加
+
+from imblearn.over_sampling import SMOTE
+from imblearn.under_sampling import RandomUnderSampler
+from imblearn.combine import SMOTETomek
+
+# 組み合わせ戦略
+smote_tomek = SMOTETomek(random_state=42)
+X_resampled, y_resampled = smote_tomek.fit_resample(X_train, y_train)
+```
+
+##### b) データ拡張の強化
+```python
+# 現在の拡張: ノイズ、時間シフト、スケーリング
+# 追加可能な拡張:
+- 時間ワーピング（Time Warping）
+- マグニチュード変更
+- チャンネルシャッフル
+- ミックスアップ（Mixup）
+```
+
+##### c) Pinchクラスの除外検討
+```python
+# Pinchクラス（1サンプルのみ）を除外して5クラス分類に変更
+classes_to_keep = [0, 1, 2, 3, 4]  # Pinch (5) を除外
+```
+
+#### 2. **損失関数の改善**
+
+##### a) Focal Loss
+```python
+import torch.nn.functional as F
+
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=1, gamma=2):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+
+    def forward(self, inputs, targets):
+        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
+        pt = torch.exp(-ce_loss)
+        focal_loss = self.alpha * (1-pt)**self.gamma * ce_loss
+        return focal_loss.mean()
+```
+
+##### b) Class-Balanced Loss
+```python
+from pytorch_metric_learning import losses
+
+# Effective Number of Samples を考慮
+beta = 0.9999
+effective_num = 1.0 - np.power(beta, samples_per_class)
+weights = (1.0 - beta) / effective_num
+weights = weights / weights.sum() * num_classes
+```
+
+#### 3. **モデルアーキテクチャの改善**
+
+```python
+# より深いネットワーク
+# Attentionメカニズムの追加
+# ResNet風のスキップ接続
+```
+
+#### 4. **訓練戦略の改善**
+
+##### a) 2段階訓練
+```python
+# Stage 1: 全クラスを均等にサンプリングして事前訓練
+# Stage 2: 元の分布でファインチューニング
+```
+
+##### b) Curriculum Learning
+```python
+# 簡単なサンプル（No Gesture vs その他）から始める
+# 徐々に難しいタスク（全6クラス分類）に移行
+```
+
+##### c) Early Stopping の改善
+```python
+# 検証精度だけでなくF1スコアやバランス精度も監視
+# マイノリティクラスの性能も考慮
+```
+
+#### 5. **評価指標の改善**
+
+```python
+# 精度だけでなく以下も追加監視:
+- バランス精度（Balanced Accuracy）
+- マクロ平均F1スコア（Macro-averaged F1）
+- クラス別Recall（特にマイノリティクラス）
+- Cohen's Kappa係数
+```
+
+---
+
+### 📁 保存されたファイル
+
+```
+results/cnn_lstm/
+├── best_model.pth                    # ベストモデル（Epoch 2）
+├── training_curves.png               # 訓練・検証の損失/精度曲線
+├── confusion_matrix_validation.png   # 検証セット混同行列
+├── confusion_matrix_test.png         # テストセット混同行列
+└── tensorboard/                      # TensorBoardログ
+```
+
+### 使用方法
+
+#### モデルの訓練
+```bash
+# CNN-LSTMモデルを訓練
+python train_deep_learning.py --model_type cnn_lstm --epochs 50 --batch_size 64 --lr 0.001
+
+# 他のモデルタイプ
+python train_deep_learning.py --model_type cnn           # Simple CNN
+python train_deep_learning.py --model_type attention_lstm # Attention LSTM
+```
+
+#### TensorBoardでの可視化
+```bash
+tensorboard --logdir results/cnn_lstm/tensorboard
+```
+
+---
+
+### 🎯 今後の方向性
+
+**現状**: モデルは多数派クラス予測に陥っており、実用的なジェスチャー認識は不可能
+
+**次のステップ**:
+1. **最優先**: リサンプリング戦略の実装（SMOTE + アンダーサンプリング）
+2. Focal Lossへの変更
+3. データ拡張の大幅強化
+4. Pinchクラスの除外（5クラス分類への変更）
+5. モデルアーキテクチャの見直し（Attention機構の追加等）
+
+**目標精度**:
+- 単純な精度: 70-80%（現在72%だが無意味）
+- **重要**: 各ジェスチャーのRecallが最低40%以上
+- マクロ平均F1スコア: 0.60以上
+
+---
+
 **最終更新**: 2025-10-23
 **分析ツール**: Python 3.x (NumPy, Pandas, Matplotlib, Seaborn, Scikit-learn, PyTorch)
 **データセット**: EMG-EPN612 (612ユーザー、8チャンネル、200 Hz)
+**GPUデバイス**: NVIDIA GeForce RTX 5090 (CUDA 12.8)
