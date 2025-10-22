@@ -2,6 +2,19 @@
 trainingJSON/
 testingJSON/
 
+# Model files
+*.h5
+*.pkl
+*.pth
+*.ckpt
+models/saved/
+checkpoints/
+
+# Results
+results/
+outputs/
+experiments/
+
 # Python cache
 __pycache__/
 *.py[cod]

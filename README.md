@@ -1,6 +1,11 @@
-# EMG-EPN612 データセット分析
+# EMG-EPN612 データセット分析とモデル構築
 
-EMG-EPN612データセットの探索的データ分析（EDA）ツールと結果を提供するリポジトリです。
+EMG-EPN612データセットの探索的データ分析（EDA）とジェスチャー認識モデルの実装を提供するリポジトリです。
+
+## 🌿 ブランチ構成
+
+- **main/master**: EDA（探索的データ分析）
+- **baseline**: 機械学習モデル実装（ベースラインモデル）
 
 ## 📊 概要
 
@@ -302,6 +307,54 @@ from imblearn.over_sampling import SMOTE
 
 ---
 
+## 🤖 機械学習モデル（baselineブランチ）
+
+`baseline`ブランチには、ジェスチャー認識のための機械学習モデルが実装されています。
+
+### モデル構築の使用方法
+
+```bash
+# baselineブランチに切り替え
+git checkout baseline
+
+# 依存ライブラリをインストール
+pip install -r requirements_ml.txt
+
+# ベースラインモデルを訓練
+python train_baseline.py --data_path . --max_users 20 --model_type random_forest
+```
+
+### 実装されているモデル
+
+- **Random Forest**: アンサンブル学習ベースの分類器
+- **SVM (Support Vector Machine)**: サポートベクターマシン
+- **k-NN (k-Nearest Neighbors)**: 最近傍法
+
+### 主な機能
+
+1. **データローダー** (`src/data/data_loader.py`)
+   - EMG-EPN612データセットの読み込み
+   - ウィンドウベースのセグメンテーション
+   - 層化サンプリング
+
+2. **特徴量抽出** (`src/features/feature_extractor.py`)
+   - 時間領域特徴量（MAV, RMS, ZC, SSC, WL等）
+   - 周波数領域特徴量（MNF, MDF, パワースペクトル等）
+   - バンドパス・ノッチフィルタ
+   - 信号正規化
+
+3. **ベースラインモデル** (`src/models/baseline_models.py`)
+   - クラス不均衡への対処
+   - モデル訓練と評価
+   - 混同行列と性能比較の可視化
+
+4. **訓練パイプライン** (`train_baseline.py`)
+   - エンドツーエンドの訓練パイプライン
+   - コマンドライン引数でのカスタマイズ
+   - 結果の自動保存
+
+---
+
 **最終更新**: 2025-10-23
-**分析ツール**: Python 3.x (NumPy, Pandas, Matplotlib, Seaborn)
+**分析ツール**: Python 3.x (NumPy, Pandas, Matplotlib, Seaborn, Scikit-learn, PyTorch)
 **データセット**: EMG-EPN612 (612ユーザー、8チャンネル、200 Hz)
