@@ -1,162 +1,307 @@
-# EMG-EPN612 Dataset Analysis
+# EMG-EPN612 データセット分析
 
-This repository contains exploratory data analysis (EDA) tools and results for the EMG-EPN612 dataset.
+EMG-EPN612データセットの探索的データ分析（EDA）ツールと結果を提供するリポジトリです。
 
-## Overview
+## 📊 概要
 
-The EMG-EPN612 dataset contains electromyography (EMG) signals captured using the Myo Armband for gesture recognition tasks. This repository provides analysis scripts and comprehensive EDA results.
+EMG-EPN612データセットは、Myo Armbandを使用して記録された筋電図（EMG）信号を含むジェスチャー認識用データセットです。本リポジトリでは、包括的なデータ分析スクリプトと詳細な分析結果を提供しています。
 
-### Dataset Specifications
-- **Total Users**: 612 (306 training, 306 testing)
-- **Device**: Myo Armband
-- **Sampling Frequency**: 200 Hz
-- **Recording Duration**: 5 seconds per gesture
-- **EMG Channels**: 8 channels
-- **Gesture Classes**: 6 (fist, waveIn, waveOut, open, pinch, noGesture)
+### データセット仕様
+- **総ユーザー数**: 612名（トレーニング306名、テスト306名）
+- **デバイス**: Myo Armband
+- **サンプリング周波数**: 200 Hz
+- **記録時間**: 1ジェスチャーあたり5秒
+- **EMGチャンネル数**: 8チャンネル
+- **ジェスチャークラス**: 6種類（fist, waveIn, waveOut, open, pinch, noGesture）
 
-## Repository Structure
+---
+
+## 📁 リポジトリ構成
 
 ```
 .
-├── emg_eda.py                      # Main EDA analysis script
-├── eda_results/                    # Analysis results directory
-│   ├── EDA_REPORT.md              # Comprehensive analysis report
-│   ├── emg_signals_8channels.png  # 8-channel EMG signal visualization
-│   ├── gesture_detection_timeline.png  # Gesture timeline
-│   ├── demographics_summary.png   # User demographics visualization
-│   ├── emg_statistics_summary.png # EMG statistics visualization
-│   ├── gesture_distribution.png   # Gesture frequency distribution
-│   ├── demographics_stats.csv     # Detailed demographic statistics
-│   └── emg_stats.csv             # Detailed EMG statistics
-├── .gitignore                     # Git ignore file (excludes dataset)
-└── README.md                      # This file
+├── emg_eda.py                      # EDA分析スクリプト
+├── eda_results/                    # 分析結果ディレクトリ
+│   ├── EDA_REPORT.md              # 包括的な分析レポート（英語）
+│   ├── emg_signals_8channels.png  # 8チャンネルEMG信号の可視化
+│   ├── gesture_detection_timeline.png  # ジェスチャー検出タイムライン
+│   ├── demographics_summary.png   # ユーザー属性の可視化
+│   ├── emg_statistics_summary.png # EMG統計の可視化
+│   ├── gesture_distribution.png   # ジェスチャー頻度分布
+│   ├── demographics_stats.csv     # 詳細な属性統計
+│   └── emg_stats.csv             # 詳細なEMG統計
+├── .gitignore                     # Git無視ファイル（データセットを除外）
+└── README.md                      # このファイル
 ```
 
-## Dataset Download
+---
 
-The actual dataset files (trainingJSON/ and testingJSON/) are not included in this repository due to their size.
+## 💾 データセットのダウンロード
 
-You can download the EMG-EPN612 dataset from:
-- [Original Dataset Source]
-- Place the downloaded `trainingJSON/` and `testingJSON/` folders in the root directory
+実際のデータセットファイル（`trainingJSON/`と`testingJSON/`）は、サイズの都合上このリポジトリには含まれていません。
 
-## Requirements
+データセットのダウンロード方法：
+1. EMG-EPN612データセットを元のソースからダウンロード
+2. ダウンロードした`trainingJSON/`と`testingJSON/`フォルダをルートディレクトリに配置
+
+---
+
+## 🔧 必要なライブラリ
 
 ```bash
 pip install numpy pandas matplotlib seaborn
 ```
 
-Python 3.7+ required.
+Python 3.7以上が必要です。
 
-## Usage
+---
 
-1. Download and place the dataset in the root directory
-2. Run the EDA script:
+## 🚀 使用方法
+
+1. データセットをルートディレクトリに配置
+2. EDAスクリプトを実行：
 
 ```bash
 python emg_eda.py
 ```
 
-The script will:
-- Analyze dataset structure and demographics
-- Compute EMG signal statistics
-- Generate visualizations
-- Create a comprehensive report
+スクリプトの実行内容：
+- データセット構造と属性の分析
+- EMG信号統計の計算
+- 可視化の生成
+- 包括的なレポートの作成
 
-All results will be saved in the `eda_results/` directory.
-
-## Key Findings
-
-### User Demographics
-- **Age**: Mean 24.3 years (range: 18-54)
-- **Gender**: 70% male, 30% female
-- **Handedness**: 95% right-handed, 5% left-handed
-
-### EMG Signal Characteristics
-- **Overall Mean Amplitude**: -0.84 ± 0.76
-- **Standard Deviation**: 14.10 ± 12.57
-- **Signal Range**: 143.10 ± 79.80
-- Channels 3 & 4 show highest variability (std ~28-29)
-
-### Gesture Distribution
-- **No Gesture**: 44.5%
-- **Wave Out**: 33.3%
-- **Wave In**: 7.3%
-- **Open**: 6.1%
-- **Fist**: 3.5%
-- **Pinch**: 0.2%
-
-⚠️ **Note**: Significant class imbalance exists, requiring appropriate handling techniques.
-
-## Analysis Features
-
-The EDA script provides:
-
-1. **Dataset Overview**
-   - User count and distribution
-   - Recording specifications
-
-2. **Demographic Analysis**
-   - Age, gender, handedness distributions
-   - Ethnic diversity
-
-3. **EMG Signal Analysis**
-   - Per-channel statistics
-   - Signal amplitude and variability
-   - Gesture frequency distribution
-
-4. **Visualizations**
-   - 8-channel EMG time-series plots
-   - Gesture detection timeline
-   - Statistical summary plots
-   - Demographic distribution charts
-
-5. **Statistical Reports**
-   - CSV files with detailed statistics
-   - Comprehensive markdown report
-
-## Recommendations for ML Development
-
-1. **Preprocessing**
-   - Bandpass filtering (20-450 Hz)
-   - Notch filtering (50/60 Hz)
-   - Normalization/standardization
-
-2. **Feature Engineering**
-   - Time-domain: RMS, MAV, ZC, SSC, WL
-   - Frequency-domain: MNF, MDF, power spectral density
-   - Time-frequency: Wavelet coefficients
-
-3. **Model Training**
-   - Address class imbalance (class weights, oversampling)
-   - Use stratified k-fold cross-validation
-   - Consider: SVM, Random Forest, CNN, LSTM
-
-4. **Evaluation**
-   - Use F1-score and balanced accuracy
-   - Analyze confusion matrix
-   - Report per-class performance
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit issues or pull requests.
-
-## License
-
-Please refer to the original EMG-EPN612 dataset license terms.
-
-## Citation
-
-If you use this analysis in your research, please cite the original dataset:
-
-```
-[Add appropriate citation for EMG-EPN612 dataset]
-```
-
-## Contact
-
-For questions or issues, please open an issue on GitHub.
+すべての結果は`eda_results/`ディレクトリに保存されます。
 
 ---
 
-**Last Updated**: 2025-10-23
+## 📈 分析結果
+
+### 1. EMG信号の可視化
+
+#### 8チャンネルEMG信号
+![EMG Signals](eda_results/emg_signals_8channels.png)
+
+8つのEMGチャンネルの時系列信号を表示。各チャンネルの平均値と標準偏差も表示されています。
+
+#### ジェスチャー検出タイムライン
+![Gesture Timeline](eda_results/gesture_detection_timeline.png)
+
+時間経過に伴うジェスチャー検出の推移を可視化。各ジェスチャーが異なる色で表現されています。
+
+---
+
+### 2. ユーザー属性分析
+
+![Demographics](eda_results/demographics_summary.png)
+
+#### 主な発見
+- **年齢**: 平均24.3歳（範囲：18-54歳）
+- **性別**: 男性70%、女性30%
+- **利き手**: 右手95%、左手5%
+- **民族**: 複数の民族グループが含まれる
+
+⚠️ **注意**: データセットには若年成人への偏りがあり、性別にも不均衡が見られます。
+
+---
+
+### 3. EMG信号統計
+
+![EMG Statistics](eda_results/emg_statistics_summary.png)
+
+#### 全体統計
+- **平均振幅**: -0.84 ± 0.76
+- **標準偏差**: 14.10 ± 12.57
+- **信号範囲**: 143.10 ± 79.80
+
+#### チャンネル別の特徴
+
+| チャンネル | 平均振幅 | 標準偏差 | 信号範囲 |
+|-----------|---------|---------|---------|
+| CH1 | -0.86 ± 0.15 | 6.92 ± 3.65 | 95.90 ± 47.78 |
+| CH2 | -0.96 ± 0.22 | 12.46 ± 5.71 | 155.62 ± 60.44 |
+| CH3 | -0.45 ± 1.29 | 28.99 ± 12.80 | 233.15 ± 52.58 |
+| CH4 | -0.73 ± 1.60 | 27.53 ± 13.09 | 232.77 ± 38.98 |
+| CH5 | -0.99 ± 0.18 | 16.25 ± 10.70 | 170.60 ± 58.48 |
+| CH6 | -0.93 ± 0.20 | 9.01 ± 10.25 | 102.27 ± 58.88 |
+| CH7 | -0.89 ± 0.16 | 6.58 ± 6.15 | 82.14 ± 56.64 |
+| CH8 | -0.88 ± 0.15 | 5.06 ± 2.31 | 72.32 ± 33.12 |
+
+**重要な発見**:
+- **Channel 3と4**が最も高い変動性を示す（標準偏差 ~28-29）
+- より動的な筋肉活動を捉えている可能性が高い
+- **Channel 1, 7, 8**は比較的安定した信号
+
+---
+
+### 4. ジェスチャー分布
+
+![Gesture Distribution](eda_results/gesture_distribution.png)
+
+| ジェスチャー | サンプル数 | 割合 |
+|-------------|-----------|------|
+| No Gesture | 22,235 | 44.5% |
+| Wave Out | 16,641 | 33.3% |
+| Wave In | 3,666 | 7.3% |
+| Open | 3,038 | 6.1% |
+| Fist | 1,746 | 3.5% |
+| Pinch | 101 | 0.2% |
+
+⚠️ **クラス不均衡の問題**:
+- "No Gesture"が44.5%で最多
+- "Pinch"がわずか0.2%で極端に少ない
+- 機械学習モデル訓練時には**クラス重み付け**や**データ拡張**が必要
+
+---
+
+## 🔍 EDAスクリプトの機能
+
+1. **データセット概要**
+   - ユーザー数と分布
+   - 記録仕様
+
+2. **属性分析**
+   - 年齢、性別、利き手の分布
+   - 民族的多様性
+
+3. **EMG信号分析**
+   - チャンネル別統計
+   - 信号振幅と変動性
+   - ジェスチャー頻度分布
+
+4. **可視化**
+   - 8チャンネルEMG時系列プロット
+   - ジェスチャー検出タイムライン
+   - 統計サマリープロット
+   - 属性分布チャート
+
+5. **統計レポート**
+   - 詳細統計のCSVファイル
+   - 包括的なMarkdownレポート
+
+---
+
+## 🤖 機械学習開発の推奨事項
+
+### 1. 前処理
+```python
+# 推奨される前処理パイプライン
+- バンドパスフィルタ（20-450 Hz）
+- ノッチフィルタ（50/60 Hz電源ノイズ除去）
+- 正規化/標準化
+```
+
+### 2. 特徴量エンジニアリング
+
+**時間領域特徴量**:
+- RMS（二乗平均平方根）
+- MAV（平均絶対値）
+- ZC（ゼロクロッシング）
+- SSC（傾き符号変化）
+- WL（波形長）
+
+**周波数領域特徴量**:
+- MNF（平均周波数）
+- MDF（中央周波数）
+- パワースペクトル密度
+
+**時間-周波数特徴量**:
+- ウェーブレット係数
+- 短時間フーリエ変換（STFT）
+
+### 3. モデル訓練
+
+**推奨アルゴリズム**:
+- **古典的機械学習**: SVM、Random Forest、k-NN
+- **深層学習**: CNN、LSTM、CNN-LSTMハイブリッド
+- **転移学習**: 事前学習モデルのEMGへの適用
+
+**クラス不均衡への対処**:
+```python
+# クラス重み付け
+from sklearn.utils.class_weight import compute_class_weight
+
+# オーバーサンプリング（SMOTE等）
+from imblearn.over_sampling import SMOTE
+
+# データ拡張
+- 時間シフト
+- ノイズ注入
+- スケーリング
+```
+
+### 4. 評価戦略
+
+```python
+# 推奨される評価指標
+- 正解率（Accuracy）だけでなく
+- 適合率（Precision）
+- 再現率（Recall）
+- F1スコア ← クラス不均衡に対して重要
+- 混同行列（Confusion Matrix）
+- クラス別性能評価
+```
+
+**クロスバリデーション**:
+- 層化k分割交差検証（Stratified k-fold）を使用
+- ユーザー独立評価 vs ユーザー依存評価
+
+---
+
+## 📊 データ品質評価
+
+### ✅ 強み
+- 大規模なサンプルサイズ（612ユーザー）
+- 高品質な8チャンネルEMGデータ
+- 標準化された記録プロトコル（200 Hz、5秒）
+- 多様な人口統計学的表現
+- 構造化されたJSON形式
+
+### ⚠️ 制限事項
+- 顕著なクラス不均衡（特にPinchジェスチャー: 0.2%）
+- 性別の不均衡（男性70%、女性30%）
+- 利き手の偏り（右手95%）
+- 若年成人への年齢の偏り（平均24.3歳）
+- 不明なジェスチャー状態の存在（5.0%）
+
+### 💡 推奨対策
+1. マイノリティクラスへのデータ拡張適用
+2. 訓練/検証分割に層化サンプリングを使用
+3. 過小表現ジェスチャーの追加データ収集を検討
+4. 適切な評価指標の使用（F1スコア、バランス正解率）
+
+---
+
+## 🎯 潜在的な応用
+
+このデータセットは以下の用途に適しています：
+
+1. **ジェスチャー認識**: リアルタイム手ジェスチャー分類のための機械学習モデル訓練
+2. **ヒューマンコンピュータインタラクション**: EMGベースの制御インターフェース開発
+3. **義肢制御**: 筋電義肢の筋電制御に関する研究
+4. **ユーザー認証**: 生体認証としてのEMG信号の探索
+5. **信号処理研究**: EMG信号特性と前処理技術の研究
+
+---
+
+## 📝 ライセンス
+
+元のEMG-EPN612データセットのライセンス条項を参照してください。
+
+---
+
+## 🤝 コントリビューション
+
+コントリビューションを歓迎します！IssueやPull Requestをお気軽に提出してください。
+
+---
+
+## 📧 お問い合わせ
+
+質問や問題がある場合は、GitHubでIssueを開いてください。
+
+---
+
+**最終更新**: 2025-10-23
+**分析ツール**: Python 3.x (NumPy, Pandas, Matplotlib, Seaborn)
+**データセット**: EMG-EPN612 (612ユーザー、8チャンネル、200 Hz)
