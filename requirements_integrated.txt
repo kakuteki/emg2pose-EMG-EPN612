@@ -1,0 +1,32 @@
+# Trial 13: Integrated Training Requirements
+# All dependencies for the complete integrated training script
+
+# Core ML Libraries
+numpy>=1.21.0
+pandas>=1.3.0
+scikit-learn>=1.0.0
+
+# Deep Learning
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Signal Processing
+scipy>=1.7.0
+pywt>=1.1.1
+
+# Data Augmentation
+tsaug>=0.2.1
+
+# Class Imbalance Handling
+imbalanced-learn>=0.10.0
+
+# Visualization
+matplotlib>=3.4.0
+seaborn>=0.11.0
+
+# Progress & Logging
+tqdm>=4.62.0
+tensorboard>=2.8.0
+
+# Configuration
+pyyaml>=6.0
