@@ -73,19 +73,24 @@ class DataAugmenter:
     def __init__(self, enable=True):
         self.enable = enable
         if enable:
-            self.augmenter = (
-                tsaug.AddNoise(scale=0.01) * 0.3 +
-                tsaug.TimeWarp(n_speed_change=3, max_speed_ratio=2.0) * 0.2 +
-                tsaug.Drift(max_drift=0.1, n_drift_points=3) * 0.2 +
-                tsaug.Quantize(n_levels=10) * 0.1
-            )
+            # Create list of augmenters to apply sequentially with probabilities
+            self.augmenters = [
+                tsaug.AddNoise(scale=0.01) @ 0.5,
+                tsaug.TimeWarp(n_speed_change=3, max_speed_ratio=2.0) @ 0.3,
+                tsaug.Drift(max_drift=0.1, n_drift_points=3) @ 0.3,
+                tsaug.Quantize(n_levels=10) @ 0.2
+            ]
 
     def augment(self, X):
         if not self.enable:
             return X
         X_transposed = X.transpose(0, 2, 1)
-        X_aug = self.augmenter.augment(X_transposed)
-        return X_aug.transpose(0, 2, 1)
+        # Apply each augmenter sequentially with their probabilities
+        X_aug = X_transposed
+        for aug in self.augmenters:
+            X_aug = aug.augment(X_aug)
+        # Fix negative strides issue by making a copy
+        return X_aug.transpose(0, 2, 1).copy()
 
 
 def apply_resampling(X, y):
@@ -98,7 +103,8 @@ def apply_resampling(X, y):
     pipeline = Pipeline([('over', over), ('under', under)])
 
     X_resampled, y_resampled = pipeline.fit_resample(X_flat, y)
-    X_resampled = X_resampled.reshape(-1, C, L)
+    # Fix negative strides issue by making a contiguous copy
+    X_resampled = X_resampled.reshape(-1, C, L).copy()
     return X_resampled, y_resampled
 
 
@@ -332,6 +338,17 @@ def main(args):
     test_loader_data = EMGDataLoader(args.data_path, dataset_type='testing')
     X_test_raw, y_test, _ = test_loader_data.load_dataset(max_users=args.max_users)
 
+    # Exclude Pinch class if requested
+    if args.exclude_pinch:
+        print("\nExcluding Pinch class (label 5)...")
+        train_mask = y_train != 5
+        test_mask = y_test != 5
+        X_train_raw = X_train_raw[train_mask]
+        y_train = y_train[train_mask]
+        X_test_raw = X_test_raw[test_mask]
+        y_test = y_test[test_mask]
+        print(f"After exclusion - Train: {X_train_raw.shape[0]} samples, Test: {X_test_raw.shape[0]} samples")
+
     # Preprocess
     print("\n[Step 2/6] Preprocessing...")
     preprocessor = EMGPreprocessor(sampling_rate=200)
@@ -345,7 +362,94 @@ def main(args):
     model = get_model(model_type=args.model_type, input_channels=8, num_classes=num_classes, dropout=args.dropout).to(device)
     print(f"Model: {args.model_type}, Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
-    print("\nIntegrated training script ready. This is implementation only - no training will be executed.")
+    # Apply Resampling (SMOTE + Under-sampling)
+    if args.use_resampling:
+        print("\n[Step 4/6] Applying SMOTE + Under-sampling...")
+        X_train, y_train_split = apply_resampling(X_train, y_train_split)
+        print(f"Resampled train data shape: {X_train.shape}")
+
+    # Data Augmentation
+    augmenter = DataAugmenter(enable=args.use_augmentation)
+    if args.use_augmentation:
+        print("\n[Step 5/6] Data augmentation enabled")
+
+    # Create data loaders
+    print("\n[Step 6/6] Creating data loaders...")
+    # Fix negative strides issue by ensuring contiguous arrays
+    train_dataset = TensorDataset(torch.FloatTensor(X_train.copy()), torch.LongTensor(y_train_split))
+    val_dataset = TensorDataset(torch.FloatTensor(X_val.copy()), torch.LongTensor(y_val))
+    test_dataset = TensorDataset(torch.FloatTensor(X_test_preprocessed.copy()), torch.LongTensor(y_test))
+
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
+    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
+
+    # Setup criterion (Focal Loss or CrossEntropy)
+    if args.use_focal_loss:
+        criterion = FocalLoss(gamma=args.focal_gamma)
+        print(f"Using Focal Loss (gamma={args.focal_gamma})")
+    else:
+        criterion = nn.CrossEntropyLoss()
+        print("Using CrossEntropy Loss")
+
+    # Setup optimizer
+    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+
+    # Setup learning rate scheduler
+    scheduler = WarmupCosineAnnealingLR(optimizer, warmup_epochs=args.warmup_epochs,
+                                       max_epochs=args.epochs, eta_min=1e-6)
+
+    # Setup trainer
+    save_dir = args.save_dir if hasattr(args, 'save_dir') else f'results/{args.model_type}'
+    trainer = IntegratedTrainer(
+        model=model,
+        device=device,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        test_loader=test_loader,
+        criterion=criterion,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        num_epochs=args.epochs,
+        gradient_clip=args.gradient_clip,
+        save_dir=save_dir,
+        exclude_pinch=args.exclude_pinch
+    )
+
+    # Train the model
+    trainer.train()
+
+    # Load best model and evaluate on test set
+    best_checkpoint = torch.load(trainer.save_dir / 'best_model.pth', map_location=device, weights_only=False)
+    model.load_state_dict(best_checkpoint['model_state_dict'])
+    print(f"\nLoaded best model from epoch {best_checkpoint['epoch']+1}")
+
+    # Evaluate on validation and test sets
+    print("\n" + "="*80)
+    val_acc, val_cm, _, _ = trainer.evaluate(val_loader, 'Validation')
+    test_acc, test_cm, _, _ = trainer.evaluate(test_loader, 'Test')
+    print("="*80)
+
+    # Save final results
+    results_summary = {
+        'model_type': args.model_type,
+        'best_val_acc': float(trainer.best_val_acc),
+        'test_acc': float(test_acc * 100),
+        'num_classes': num_classes,
+        'exclude_pinch': args.exclude_pinch,
+        'use_focal_loss': args.use_focal_loss,
+        'use_resampling': args.use_resampling,
+        'use_augmentation': args.use_augmentation,
+        'two_stage': args.two_stage
+    }
+
+    import json
+    with open(trainer.save_dir / 'results_summary.json', 'w') as f:
+        json.dump(results_summary, f, indent=2)
+
+    print(f"\nResults summary saved to: {trainer.save_dir / 'results_summary.json'}")
+    print(f"Best Validation Accuracy: {trainer.best_val_acc:.2f}%")
+    print(f"Test Accuracy: {test_acc*100:.2f}%")
 
 
 if __name__ == "__main__":
