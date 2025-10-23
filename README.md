@@ -1949,6 +1949,124 @@ results/waveformer_complete/
 
 ---
 
+## 🔄 Trial 12: 2段階訓練戦略
+
+### 概要
+
+データ不均衡問題に対処するため、2段階訓練戦略を実装:
+- **Stage 1**: SMOTEでバランスされたデータで事前訓練（高学習率）
+- **Stage 2**: 全データでファインチューニング（低学習率）
+
+### 実装内容
+
+#### 1. 2段階訓練の流れ
+
+```
+Stage 1: Pre-training on Balanced Data
+├── データ: SMOTEでバランスされた訓練データ
+├── 学習率: 1e-3（高速学習）
+├── エポック数: 30（デフォルト）
+└── 目的: バランスの取れた特徴表現を学習
+
+↓ ベストモデルをロード
+
+Stage 2: Fine-tuning on All Data
+├── データ: 元の訓練データ（不均衡あり）
+├── 学習率: 1e-4（微調整）
+├── エポック数: 20（デフォルト）
+└── 目的: 実データ分布に適応
+```
+
+#### 2. 主な特徴
+
+**SMOTE適用**:
+- Stage 1でのみ適用
+- 全クラスを均等にリサンプリング
+- マイナークラスの学習を促進
+
+**段階的学習率**:
+- Stage 1: lr=1e-3（バランスデータで高速学習）
+- Stage 2: lr=1e-4（全データで慎重に微調整）
+
+**独立したベストモデル保存**:
+- `stage1_best_model.pth`: Stage 1のベストモデル
+- `stage2_best_model.pth`: Stage 2のベストモデル（最終モデル）
+
+#### 3. コマンド例
+
+```bash
+# デフォルト設定（CNN-LSTM、Stage1=30epochs、Stage2=20epochs）
+python train_two_stage.py
+
+# WaveFormerで実行、各ステージのエポック数を指定
+python train_two_stage.py --model_type waveformer_complete \
+                          --stage1_epochs 40 \
+                          --stage2_epochs 30
+
+# 学習率を手動調整
+python train_two_stage.py --model_type cnn_lstm \
+                          --stage1_lr 0.002 \
+                          --stage2_lr 0.0001
+```
+
+#### 4. パラメータ一覧
+
+**Stage 1パラメータ**:
+- `--stage1_epochs`: Stage 1のエポック数（デフォルト: 30）
+- `--stage1_lr`: Stage 1の学習率（デフォルト: 1e-3）
+
+**Stage 2パラメータ**:
+- `--stage2_epochs`: Stage 2のエポック数（デフォルト: 20）
+- `--stage2_lr`: Stage 2の学習率（デフォルト: 1e-4）
+
+**共通パラメータ**:
+- `--model_type`: モデルタイプ（cnn_lstm, waveformer_complete等）
+- `--batch_size`: バッチサイズ（デフォルト: 64）
+- `--dropout`: ドロップアウト率（デフォルト: 0.5）
+- `--weight_decay`: 重み減衰（デフォルト: 1e-4）
+
+#### 5. 期待される効果
+
+1. **マイナークラスの認識向上**:
+   - Stage 1でPinch、Wave系クラスの特徴を学習
+   - バランスデータで全クラスに注意を払う
+
+2. **過学習の抑制**:
+   - Stage 1で汎用的な特徴を獲得
+   - Stage 2で実データに適度に適応
+
+3. **訓練の安定化**:
+   - 段階的な学習率調整
+   - 各ステージでベストモデルを保存
+
+### 📁 保存されるファイル
+
+```
+results/two_stage_{model_type}/
+├── stage1_best_model.pth             # Stage 1ベストモデル
+├── stage2_best_model.pth             # Stage 2ベストモデル（最終）
+├── two_stage_training_curves.png     # 2段階の訓練曲線
+├── confusion_matrix_validation.png   # 検証セット混同行列
+├── confusion_matrix_test.png         # テストセット混同行列
+└── tensorboard/                      # TensorBoardログ
+```
+
+### 💡 設計の根拠
+
+**なぜ2段階訓練か？**:
+1. **Stage 1（バランスデータ）**: 全クラスの特徴を公平に学習
+2. **Stage 2（全データ）**: 実際のデータ分布に適応
+
+**なぜ異なる学習率か？**:
+- Stage 1（1e-3）: バランスデータで大胆に学習
+- Stage 2（1e-4）: 実データで微調整、過学習を防ぐ
+
+**SMOTE vs アンダーサンプリング**:
+- SMOTE: データを増やす（情報損失なし）
+- Stage 1のみ適用で実データへの適応も確保
+
+---
+
 **最終更新**: 2025-10-23
 **分析ツール**: Python 3.x (NumPy, Pandas, Matplotlib, Seaborn, Scikit-learn, PyTorch)
 **データセット**: EMG-EPN612 (612ユーザー、8チャンネル、200 Hz)
