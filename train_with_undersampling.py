@@ -404,14 +404,14 @@ def main(args):
     print(f"  Training set loaded: {X_train_raw.shape}")
     print(f"  Test set loaded: {X_test_raw.shape}")
 
-    # Preprocess
+    # Preprocess (apply normalization)
     preprocessor = EMGPreprocessor()
-    X_train, y_train = preprocessor.fit_transform(X_train_raw, y_train_raw)
-    X_test, y_test = preprocessor.transform(X_test_raw, y_test_raw)
+    X_train = preprocessor.preprocess(X_train_raw)
+    X_test = preprocessor.preprocess(X_test_raw)
 
     # Combine train and test for resampling (we'll split again later)
     X = np.concatenate([X_train, X_test], axis=0)
-    y = np.concatenate([y_train, y_test], axis=0)
+    y = np.concatenate([y_train_raw, y_test_raw], axis=0)
 
     print(f"\n[Original Data]")
     print(f"  Total samples: {len(y)}")
