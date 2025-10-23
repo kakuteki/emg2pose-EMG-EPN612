@@ -21,6 +21,7 @@ from data.data_loader import EMGDataLoader, create_data_split
 from data.pytorch_dataset import create_dataloaders
 from features.feature_extractor import EMGPreprocessor
 from models.cnn_lstm import get_model
+from models.focal_loss import create_focal_loss
 
 
 class Trainer:
@@ -343,11 +344,24 @@ def main(args):
 
     # Calculate class weights for imbalanced data
     class_counts = np.bincount(y_train_split)
-    class_weights = 1.0 / (class_counts + 1)  # +1 to avoid division by zero
-    class_weights = class_weights / class_weights.sum() * len(class_weights)
-    class_weights = torch.FloatTensor(class_weights).to(device)
 
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    # Select loss function based on args
+    if args.loss_type == 'focal_loss':
+        print(f"\n[Loss Function] Using Focal Loss (gamma={args.focal_gamma})")
+        criterion = create_focal_loss(
+            class_counts=class_counts,
+            gamma=args.focal_gamma,
+            reduction='mean',
+            device=device
+        )
+    else:  # cross_entropy
+        print(f"\n[Loss Function] Using CrossEntropyLoss with class weights")
+        class_weights = 1.0 / (class_counts + 1)  # +1 to avoid division by zero
+        class_weights = class_weights / class_weights.sum() * len(class_weights)
+        class_weights = torch.FloatTensor(class_weights).to(device)
+        criterion = nn.CrossEntropyLoss(weight=class_weights)
+        print(f"  Class weights: {class_weights.cpu().numpy()}")
+
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=5, factor=0.5)
 
@@ -355,6 +369,12 @@ def main(args):
     # 5. Train
     # ===============================
     print("\n[Step 5/5] Training...")
+    # Set save directory based on model and loss type
+    if args.loss_type == 'focal_loss':
+        save_dir = f'results/{args.model_type}_focal_gamma{args.focal_gamma}'
+    else:
+        save_dir = f'results/{args.model_type}'
+
     trainer = Trainer(
         model=model,
         device=device,
@@ -365,7 +385,7 @@ def main(args):
         optimizer=optimizer,
         scheduler=scheduler,
         num_epochs=args.epochs,
-        save_dir=f'results/{args.model_type}'
+        save_dir=save_dir
     )
 
     trainer.train()
@@ -416,6 +436,13 @@ if __name__ == "__main__":
                        help='Learning rate')
     parser.add_argument('--weight_decay', type=float, default=1e-4,
                        help='Weight decay')
+
+    # Loss function
+    parser.add_argument('--loss_type', type=str, default='cross_entropy',
+                       choices=['cross_entropy', 'focal_loss'],
+                       help='Loss function type (default: cross_entropy)')
+    parser.add_argument('--focal_gamma', type=float, default=2.0,
+                       help='Gamma parameter for Focal Loss (default: 2.0)')
 
     # Other
     parser.add_argument('--val_split', type=float, default=0.2,
