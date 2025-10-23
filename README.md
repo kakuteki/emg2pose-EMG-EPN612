@@ -1953,3 +1953,36 @@ results/waveformer_complete/
 **分析ツール**: Python 3.x (NumPy, Pandas, Matplotlib, Seaborn, Scikit-learn, PyTorch)
 **データセット**: EMG-EPN612 (612ユーザー、8チャンネル、200 Hz)
 **GPUデバイス**: NVIDIA GeForce RTX 5090 (CUDA 12.8)
+
+## 🔬 Trial 13: 全対策統合実装
+
+### 概要
+
+Trial 1-12で個別に試行した全ての最適化技術を統合した完全版訓練スクリプトを実装。
+
+### 実装内容
+
+**統合された最適化技術**:
+- Focal Loss (gamma=2.0)
+- SMOTE + Under-sampling
+- データ拡張 (tsaug)
+- Pinchクラス除外
+- 2段階訓練
+- Cosine Annealing + Warmup
+- Gradient Clipping
+
+**ファイル**:
+- `train_integrated.py`: 統合訓練スクリプト
+- `requirements_integrated.txt`: 全依存ライブラリ
+
+**使用例**:
+```bash
+python train_integrated.py --model_type waveformer_complete --exclude_pinch
+```
+
+**特徴**:
+- 各最適化技術をフラグでON/OFF可能
+- デフォルトで全対策有効
+- WaveFormer Completeとの組み合わせで最高精度を目指す
+
+---
