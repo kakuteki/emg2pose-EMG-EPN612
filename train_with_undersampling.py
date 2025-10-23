@@ -475,10 +475,9 @@ def main(args):
     model = get_model(
         model_type=args.model_type,
         input_channels=X.shape[1],
-        sequence_length=X.shape[2],
         num_classes=5,  # 5 classes (without Pinch)
-        hidden_size=args.hidden_size,
-        num_layers=args.num_layers,
+        lstm_hidden_size=args.hidden_size,
+        lstm_num_layers=args.num_layers,
         dropout=args.dropout
     )
     model = model.to(device)
