@@ -430,19 +430,24 @@ def main(args):
 
     # Create train/val/test splits
     print(f"\n[Data Split] Creating train/val/test splits")
-    train_idx, val_idx, test_idx = create_data_split(
-        len(y_resampled),
-        train_ratio=args.train_ratio,
-        val_ratio=args.val_ratio,
-        random_state=args.seed
+    from sklearn.model_selection import train_test_split
+
+    # First split: separate test set
+    X_temp, X_test, y_temp, y_test = train_test_split(
+        X_resampled, y_resampled,
+        test_size=(1 - args.train_ratio),
+        random_state=args.seed,
+        stratify=y_resampled
     )
 
-    X_train = X_resampled[train_idx]
-    y_train = y_resampled[train_idx]
-    X_val = X_resampled[val_idx]
-    y_val = y_resampled[val_idx]
-    X_test = X_resampled[test_idx]
-    y_test = y_resampled[test_idx]
+    # Second split: separate train and validation
+    val_size_adjusted = args.val_ratio / args.train_ratio
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_temp, y_temp,
+        test_size=val_size_adjusted,
+        random_state=args.seed,
+        stratify=y_temp
+    )
 
     print(f"  Train: {len(y_train)} samples")
     print(f"  Val: {len(y_val)} samples")
