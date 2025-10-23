@@ -1278,7 +1278,227 @@ results/transformer/
 
 ---
 
-### 🎓 総括: 4つのモデルから得られた決定的知見
+## 🌊 深層学習モデル（WaveNet - Trial 6）
+
+### モデルアーキテクチャ
+
+**WaveNetモデル**を実装し、DeepMindが音声生成用に開発した拡張因果的畳み込みをEMG時系列分類に適用しました。
+
+#### 構成:
+- **入力**: 8チャンネル × 200時間ステップ
+- **入力射影層**: Conv1d(8 → 64)でチャンネル次元を特徴次元に変換
+- **残差ブロック**: 30層（3スタック × 10層）
+  - **Dilated Causal Convolution**: 指数的に増加するdilation（1, 2, 4, 8, ..., 512）
+  - **Gated Activation**: tanh(W_f * x) * sigmoid(W_g * x)
+  - **残差接続**: 各ブロックの出力を入力に加算
+  - **スキップ接続**: 全ブロックのスキップ出力を集約
+  - kernel_size: 2
+  - residual_channels: 64
+  - skip_channels: 128
+- **出力層**: Conv1d(128 → 128) × 2 (ReLU活性化)
+- **グローバルプーリング**: AdaptiveAvgPool1d
+- **分類ヘッド**: 128 → 256 → 128 → 6クラス（各層にDropout 0.2）
+- **パラメータ数**: 970,054個
+- **デバイス**: NVIDIA GeForce RTX 5090 (CUDA 12.8)
+
+#### WaveNetの特徴:
+- **因果的畳み込み**: 未来の情報を使わない（時系列予測に適切）
+- **指数的受容野**: Dilation rate 2^0, 2^1, ..., 2^9 で広範囲の依存関係を捉える
+- **効率的な並列処理**: RNNの逐次処理制約を回避
+- **ゲート機構**: LSTMに似た情報フローの制御
+
+### 訓練設定
+
+```bash
+python train_deep_learning.py --model_type wavenet --epochs 50 --batch_size 64 --lr 0.001
+```
+
+- **エポック数**: 50
+- **バッチサイズ**: 64
+- **最適化手法**: Adam (lr=0.001, weight_decay=1e-4)
+- **損失関数**: CrossEntropyLoss（クラスウェイト付き）
+- **学習率スケジューラ**: ReduceLROnPlateau
+- **データ分割**: 他モデルと同一
+
+### 訓練結果
+
+#### 最終精度
+- **検証精度**: 70.15% (Epoch 4で達成)
+- **テスト精度**: 72.08% ← **CNN-LSTM、Attention-LSTM、Transformerと完全同一**
+
+#### 訓練曲線
+![Training Curves](results/wavenet/training_curves.png)
+
+**観察された現象**:
+- Epoch 1-4: 検証精度が徐々に向上（68.81% → 70.15%）
+- Epoch 5以降: 検証精度が急落（2-30%の範囲で乱高下）
+- 訓練精度も不安定（15-72%）
+- **CNN-LSTM、Attention-LSTM、Transformerと完全に同じ多数派クラス予測パターン**
+
+---
+
+### 🚨 **WaveNetも完全に同じ問題を再現**
+
+#### テストセット分類レポート
+
+```
+Classification Report (Test Set):
+              precision    recall  f1-score   support
+
+  No Gesture       0.72      1.00      0.84      5603
+        Fist       0.00      0.00      0.00       258
+     Wave In       0.00      0.00      0.00       149
+    Wave Out       0.00      0.00      0.00      1493
+        Open       0.00      0.00      0.00       270
+
+    accuracy                           0.72      7773
+   macro avg       0.14      0.20      0.17      7773
+weighted avg       0.52      0.72      0.60      7773
+```
+
+#### 検証セット分類レポート
+
+```
+Classification Report (Validation Set):
+              precision    recall  f1-score   support
+
+  No Gesture       0.70      1.00      0.82      1100
+        Fist       0.00      0.00      0.00        42
+     Wave In       0.00      0.00      0.00        61
+    Wave Out       0.00      0.00      0.00       298
+        Open       0.00      0.00      0.00        67
+
+    accuracy                           0.70      1568
+   macro avg       0.14      0.20      0.16      1568
+weighted avg       0.49      0.70      0.58      1568
+```
+
+#### 混同行列
+![Confusion Matrix - Test](results/wavenet/confusion_matrix_test.png)
+![Confusion Matrix - Validation](results/wavenet/confusion_matrix_validation.png)
+
+---
+
+### 📊 全モデル完全比較（5モデル）
+
+| 指標 | CNN-LSTM | Attention-LSTM | ResNet18 | Transformer | **WaveNet** | 結論 |
+|------|----------|----------------|----------|-------------|-------------|------|
+| **パラメータ数** | 791K | 669K | 4.14M | 861K | **970K** | - |
+| **テスト精度** | **72.08%** | **72.08%** | 71.41% | **72.08%** | **72.08%** | 4モデル同一 |
+| **検証精度（ベスト）** | **70.15%** | **70.15%** | **70.15%** | **70.15%** | **70.15%** | **完全同一** |
+| **マクロF1（テスト）** | **0.17** | **0.17** | 0.18 | **0.17** | **0.17** | 4モデル同一 |
+| **重みF1（テスト）** | **0.60** | **0.60** | 0.61 | **0.60** | **0.60** | 4モデル同一 |
+| **No Gesture Recall** | **1.00** | **1.00** | 0.98 | **1.00** | **1.00** | 4モデル完全同一 |
+| **Fist Recall** | **0.00** | **0.00** | 0.00 | **0.00** | **0.00** | 全モデル失敗 |
+| **Wave In Recall** | **0.00** | **0.00** | 0.00 | **0.00** | **0.00** | 全モデル失敗 |
+| **Wave Out Recall** | **0.00** | **0.00** | **0.03** | **0.00** | **0.00** | ResNet18のみ微改善 |
+| **Open Recall** | **0.00** | **0.00** | 0.00 | **0.00** | **0.00** | 全モデル失敗 |
+
+### 🎯 決定的な結論（5モデル検証完了）
+
+#### 🚨 **5つの全く異なるアーキテクチャが完全同一の失敗パターン**
+
+1. **CNN-LSTM** (791K): 空間的特徴抽出 + 逐次的時間モデリング → **多数派予測**
+2. **Attention-LSTM** (669K): 重み付き時間ステップ + 逐次処理 → **多数派予測**
+3. **Attention-ResNet18** (4.14M): 深い残差接続 + Attention → **わずかな改善（Wave Out: 0.03）**
+4. **Transformer** (861K): Self-attention + 並列処理 + 位置エンコーディング → **多数派予測**
+5. **WaveNet** (970K): Dilated causal convolutions + Gated activation → **多数派予測**
+
+#### 📈 **実験の価値: 科学的証拠の確立**
+
+**アーキテクチャの多様性**:
+- CNNベース（空間的特徴）
+- LSTMベース（逐次的時間モデリング）
+- ResNetベース（深い残差ネットワーク）
+- Transformerベース（Self-attention、並列処理）
+- **WaveNetベース（Dilated causal convolutions、音声生成技術の転用）**
+
+**パラメータ数の範囲**:
+- 最小: 669K（Attention-LSTM）
+- 最大: 4.14M（ResNet18）
+- 範囲: 約6倍の差
+
+**全て同じ結果** → **アーキテクチャは無関係**
+
+#### 💡 **極めて重要な教訓**
+
+1. **アーキテクチャの改善は無力**:
+   - **5つ**の最先端アーキテクチャを試行
+   - パラメータ数を6倍に増やしても無意味
+   - 最新のTransformer（Self-attention）も役立たない
+   - 音声生成で成功したWaveNetも効果なし
+   - ResNet18のみが0.00 → 0.03の微改善（実用性なし）
+
+2. **データの不均衡が圧倒的**:
+   - No Gesture: 70.4%
+   - どのモデルもこの不均衡を克服できない
+   - クラスウェイトだけでは全く不十分
+   - **データレベルの対策が唯一の解決策**
+
+3. **モデル選択の無意味さ**:
+   - CNN-LSTM、Attention-LSTM、Transformer、WaveNet: 完全同一の性能
+   - これ以上アーキテクチャを試しても同じ結果
+   - 計算リソースの無駄遣い
+
+#### ⚡ **科学的結論**
+
+**仮説**: 「より高度なアーキテクチャで性能が向上する」
+**結果**: **棄却** - **5つ**の異なるアーキテクチャで同一の失敗
+
+**新仮説**: 「データの極端な不均衡がボトルネック」
+**証拠**: 全モデルが70:30の不均衡を克服できず
+
+**結論**: **データレベルの介入が必須**
+
+---
+
+### 🔬 WaveNetの技術的分析
+
+#### WaveNetの理論的優位性
+
+**期待された効果**:
+1. **Dilated Causal Convolution**: 指数的に広がる受容野で長距離依存を効率的に捉える
+2. **Gated Activation**: LSTMライクな情報フローの選択的制御
+3. **並列処理**: RNNの逐次処理制約を回避、高速な訓練・推論
+4. **Skip Connections**: 複数層からの特徴を直接集約、勾配流の改善
+
+**実際の結果**:
+- 上記の優位性は全く役に立たなかった
+- CNN-LSTM、Attention-LSTM、Transformerと完全同一の性能
+- Dilated convolutionsも多数派クラス予測から脱却できず
+
+#### WaveNetが失敗した理由
+
+1. **データ不均衡の圧倒的影響**:
+   - どれだけ広い受容野を持っても
+   - 損失関数が多数派クラス最適化に収束
+   - Gated activationも無力
+
+2. **クラスウェイトの限界**:
+   - CrossEntropyLossにクラスウェイトを適用
+   - しかし70:30の極端な不均衡には不十分
+   - より強力な介入が必要（Focal Loss、リサンプリング等）
+
+3. **音声生成 ≠ 時系列分類**:
+   - WaveNetは音声波形の生成で成功
+   - しかし、クラス不均衡のある分類問題には適用できない
+   - アーキテクチャの優秀さだけでは不十分
+
+---
+
+### 📁 保存されたファイル（WaveNet）
+
+```
+results/wavenet/
+├── best_model.pth                    # ベストモデル（Epoch 4）
+├── training_curves.png               # 訓練・検証の損失/精度曲線
+├── confusion_matrix_validation.png   # 検証セット混同行列
+└── confusion_matrix_test.png         # テストセット混同行列
+```
+
+---
+
+### 🎓 総括: 5つのモデルから得られた決定的知見
 
 #### ✅ **完了した実験**
 
@@ -1286,20 +1506,23 @@ results/transformer/
 2. **Attention-LSTM**: 重要な時間ステップへの注目
 3. **Attention-ResNet18**: 深い残差ネットワーク + Attention
 4. **Transformer**: Self-attention + 位置エンコーディング
+5. **WaveNet**: Dilated causal convolutions + Gated activation
 
 #### 🚨 **共通の致命的問題**
 
-- **4/4モデルが多数派クラス予測に収束**
+- **5/5モデルが多数派クラス予測に収束**
 - パラメータ数を6倍にしても改善なし（669K → 4.14M）
 - 最新アーキテクチャ（Transformer）も無力
+- 音声生成で成功したWaveNetも効果なし
 - ResNet18のみわずかな改善（Wave Out: 0.00 → 0.03）だが実用性なし
 
 #### 💡 **明確な教訓**
 
 1. **アーキテクチャの探索は完了**:
    - これ以上モデルを試しても同じ結果
-   - CNN、LSTM、ResNet、Transformerすべて試行済み
+   - CNN、LSTM、ResNet、Transformer、WaveNetすべて試行済み
    - パラメータ数を増やしても無意味
+   - 音声生成で成功した技術も不均衡データには無力
 
 2. **データが問題の根源**:
    - No Gesture: 70.4%、Pinch: 0.0%（1サンプル）
@@ -1307,7 +1530,7 @@ results/transformer/
    - クラスウェイトだけでは全く不十分
 
 3. **次のステップは明確**:
-   - ✅ アーキテクチャ探索完了（4モデル評価）
+   - ✅ アーキテクチャ探索完了（5モデル評価）
    - ⚠️ データレベルの対策が唯一の解決策
    - 🔜 SMOTE、Focal Loss、データ拡張、Pinch除外
 

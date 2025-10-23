@@ -494,12 +494,176 @@ class TransformerModel(nn.Module):
         return x
 
 
+class CausalConv1d(nn.Module):
+    """
+    Causal (non-leaking) 1D convolution
+    過去の情報のみを使用する因果的畳み込み
+    """
+    def __init__(self, in_channels, out_channels, kernel_size, dilation=1):
+        super(CausalConv1d, self).__init__()
+        self.padding = (kernel_size - 1) * dilation
+        self.conv = nn.Conv1d(in_channels, out_channels, kernel_size,
+                             padding=self.padding, dilation=dilation)
+
+    def forward(self, x):
+        x = self.conv(x)
+        if self.padding > 0:
+            x = x[:, :, :-self.padding]
+        return x
+
+
+class ResidualBlock(nn.Module):
+    """
+    WaveNetの残差ブロック
+    Dilated causal convolution + Gated activation + Residual & Skip connections
+    """
+    def __init__(self, residual_channels, skip_channels, kernel_size, dilation, dropout=0.2):
+        super(ResidualBlock, self).__init__()
+
+        # Dilated causal convolution
+        self.dilated_conv = CausalConv1d(
+            residual_channels, 2 * residual_channels,
+            kernel_size, dilation
+        )
+
+        # 1x1 convolutions for residual and skip connections
+        self.residual_conv = nn.Conv1d(residual_channels, residual_channels, 1)
+        self.skip_conv = nn.Conv1d(residual_channels, skip_channels, 1)
+
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        # Dilated causal convolution
+        conv_out = self.dilated_conv(x)
+
+        # Gated activation: tanh(W_f * x) * sigmoid(W_g * x)
+        tanh_out, sigmoid_out = conv_out.chunk(2, dim=1)
+        gated = torch.tanh(tanh_out) * torch.sigmoid(sigmoid_out)
+
+        gated = self.dropout(gated)
+
+        # Residual connection
+        residual = self.residual_conv(gated)
+        residual = residual + x
+
+        # Skip connection
+        skip = self.skip_conv(gated)
+
+        return residual, skip
+
+
+class WaveNet(nn.Module):
+    """
+    WaveNet for EMG時系列分類
+
+    Dilated causal convolutions with residual and skip connections
+    Originally designed for audio generation, adapted for time-series classification
+    """
+    def __init__(self,
+                 input_channels: int = 8,
+                 num_classes: int = 6,
+                 residual_channels: int = 64,
+                 skip_channels: int = 128,
+                 kernel_size: int = 2,
+                 num_layers: int = 10,
+                 num_stacks: int = 3,
+                 dropout: float = 0.2):
+        """
+        Args:
+            input_channels: 入力チャンネル数（EMGチャンネル数）
+            num_classes: 出力クラス数
+            residual_channels: 残差接続のチャンネル数
+            skip_channels: スキップ接続のチャンネル数
+            kernel_size: 畳み込みカーネルサイズ
+            num_layers: 各スタックのレイヤー数
+            num_stacks: スタック数（同じdilationパターンを繰り返す回数）
+            dropout: ドロップアウト率
+        """
+        super(WaveNet, self).__init__()
+
+        self.input_channels = input_channels
+        self.residual_channels = residual_channels
+
+        # Input projection
+        self.input_conv = nn.Conv1d(input_channels, residual_channels, 1)
+
+        # Residual blocks with exponentially increasing dilation
+        self.residual_blocks = nn.ModuleList()
+        for stack in range(num_stacks):
+            for layer in range(num_layers):
+                dilation = 2 ** layer
+                self.residual_blocks.append(
+                    ResidualBlock(
+                        residual_channels,
+                        skip_channels,
+                        kernel_size,
+                        dilation,
+                        dropout
+                    )
+                )
+
+        # Output layers
+        self.output_conv1 = nn.Conv1d(skip_channels, skip_channels, 1)
+        self.output_conv2 = nn.Conv1d(skip_channels, skip_channels, 1)
+
+        # Global pooling and classification
+        self.global_pool = nn.AdaptiveAvgPool1d(1)
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(skip_channels, 256),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(128, num_classes)
+        )
+
+    def forward(self, x):
+        """
+        Forward pass
+
+        Args:
+            x: shape (batch_size, channels, sequence_length)
+
+        Returns:
+            output: shape (batch_size, num_classes)
+        """
+        # Input projection
+        x = self.input_conv(x)
+
+        # Accumulate skip connections
+        skip_connections = []
+
+        # Pass through residual blocks
+        for block in self.residual_blocks:
+            x, skip = block(x)
+            skip_connections.append(skip)
+
+        # Sum all skip connections
+        skip_sum = torch.stack(skip_connections, dim=0).sum(dim=0)
+
+        # Output layers with ReLU activations
+        out = F.relu(skip_sum)
+        out = self.output_conv1(out)
+        out = F.relu(out)
+        out = self.output_conv2(out)
+
+        # Global pooling
+        out = self.global_pool(out)
+
+        # Classification
+        out = self.classifier(out)
+
+        return out
+
+
 def get_model(model_type: str = 'cnn_lstm', **kwargs):
     """
     モデルを取得
 
     Args:
-        model_type: 'cnn_lstm', 'cnn', 'attention_lstm', 'attention_resnet18', or 'transformer'
+        model_type: 'cnn_lstm', 'cnn', 'attention_lstm', 'attention_resnet18', 'transformer', or 'wavenet'
         **kwargs: モデル固有のパラメータ
 
     Returns:
@@ -515,6 +679,8 @@ def get_model(model_type: str = 'cnn_lstm', **kwargs):
         return AttentionResNet18(**kwargs)
     elif model_type == 'transformer':
         return TransformerModel(**kwargs)
+    elif model_type == 'wavenet':
+        return WaveNet(**kwargs)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
