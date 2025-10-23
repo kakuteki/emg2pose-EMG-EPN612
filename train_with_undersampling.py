@@ -395,15 +395,23 @@ def main(args):
 
     # Load data
     print(f"\n[Data Loading] Loading from: {args.data_path}")
-    data_loader = EMGDataLoader(args.data_path)
-    data_loader.load_all_users(max_users=args.max_users)
+    train_loader_data = EMGDataLoader(args.data_path, dataset_type='training')
+    X_train_raw, y_train_raw, _ = train_loader_data.load_dataset(max_users=args.max_users)
+
+    test_loader_data = EMGDataLoader(args.data_path, dataset_type='testing')
+    X_test_raw, y_test_raw, _ = test_loader_data.load_dataset(max_users=args.max_users)
+
+    print(f"  Training set loaded: {X_train_raw.shape}")
+    print(f"  Test set loaded: {X_test_raw.shape}")
 
     # Preprocess
     preprocessor = EMGPreprocessor()
-    X, y = preprocessor.prepare_deep_learning_data(
-        data_loader.features,
-        data_loader.labels
-    )
+    X_train, y_train = preprocessor.fit_transform(X_train_raw, y_train_raw)
+    X_test, y_test = preprocessor.transform(X_test_raw, y_test_raw)
+
+    # Combine train and test for resampling (we'll split again later)
+    X = np.concatenate([X_train, X_test], axis=0)
+    y = np.concatenate([y_train, y_test], axis=0)
 
     print(f"\n[Original Data]")
     print(f"  Total samples: {len(y)}")
