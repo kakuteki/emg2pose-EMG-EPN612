@@ -402,7 +402,7 @@ if __name__ == "__main__":
 
     # Model
     parser.add_argument('--model_type', type=str, default='cnn_lstm',
-                       choices=['cnn_lstm', 'cnn', 'attention_lstm', 'attention_resnet18', 'transformer', 'wavenet'],
+                       choices=['cnn_lstm', 'cnn', 'attention_lstm', 'attention_resnet18', 'transformer', 'wavenet', 'waveformer'],
                        help='Model type')
     parser.add_argument('--dropout', type=float, default=0.5,
                        help='Dropout rate')

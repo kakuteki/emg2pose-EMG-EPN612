@@ -658,12 +658,228 @@ class WaveNet(nn.Module):
         return out
 
 
+class RotaryPositionEmbedding(nn.Module):
+    """
+    Rotary Position Embedding (RoPE)
+
+    回転位置エンコーディング - WaveFormerで使用される高度な位置表現
+    各位置を回転行列で表現し、相対位置情報を保持
+    """
+    def __init__(self, dim: int, max_seq_len: int = 512):
+        super(RotaryPositionEmbedding, self).__init__()
+        self.dim = dim
+
+        # 周波数を計算
+        inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2).float() / dim))
+        self.register_buffer('inv_freq', inv_freq)
+
+        # 位置インデックス
+        position = torch.arange(max_seq_len).float()
+        # 周波数と位置の外積
+        freqs = torch.outer(position, inv_freq)
+        # sin/cosを計算してキャッシュ
+        emb = torch.cat([freqs, freqs], dim=-1)
+        self.register_buffer('cos_cached', emb.cos())
+        self.register_buffer('sin_cached', emb.sin())
+
+    def rotate_half(self, x):
+        """ベクトルの前半と後半を入れ替えて符号反転"""
+        x1, x2 = x.chunk(2, dim=-1)
+        return torch.cat([-x2, x1], dim=-1)
+
+    def apply_rotary_pos_emb(self, x, seq_len):
+        """回転位置エンコーディングを適用
+
+        Args:
+            x: shape [B, num_heads, seq_len, head_dim]
+            seq_len: sequence length
+        """
+        cos = self.cos_cached[:seq_len, :].unsqueeze(0).unsqueeze(0)  # [1, 1, seq_len, head_dim]
+        sin = self.sin_cached[:seq_len, :].unsqueeze(0).unsqueeze(0)  # [1, 1, seq_len, head_dim]
+        return (x * cos) + (self.rotate_half(x) * sin)
+
+
+class RoPEMultiheadAttention(nn.Module):
+    """
+    RoPE付きマルチヘッドアテンション
+
+    標準的なアテンションにRotary Position Embeddingを統合
+    """
+    def __init__(self, embed_dim: int, num_heads: int, dropout: float = 0.1):
+        super(RoPEMultiheadAttention, self).__init__()
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+
+        assert self.head_dim * num_heads == embed_dim, "embed_dim must be divisible by num_heads"
+
+        self.qkv = nn.Linear(embed_dim, embed_dim * 3)
+        self.rope = RotaryPositionEmbedding(self.head_dim)
+        self.attn_drop = nn.Dropout(dropout)
+        self.proj = nn.Linear(embed_dim, embed_dim)
+        self.proj_drop = nn.Dropout(dropout)
+
+    def forward(self, x):
+        B, N, C = x.shape
+
+        # QKV projection
+        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv[0], qkv[1], qkv[2]
+
+        # Apply RoPE to query and key
+        q = self.rope.apply_rotary_pos_emb(q, N)
+        k = self.rope.apply_rotary_pos_emb(k, N)
+
+        # Scaled dot-product attention
+        attn = (q @ k.transpose(-2, -1)) * (self.head_dim ** -0.5)
+        attn = F.softmax(attn, dim=-1)
+        attn = self.attn_drop(attn)
+
+        # Apply attention to values
+        x = (attn @ v).transpose(1, 2).reshape(B, N, C)
+        x = self.proj(x)
+        x = self.proj_drop(x)
+
+        return x
+
+
+class WaveFormerBlock(nn.Module):
+    """
+    WaveFormer Transformer Block
+
+    RoPE Attention + Feed-forward network
+    """
+    def __init__(self, dim: int, num_heads: int, mlp_ratio: float = 4.0, dropout: float = 0.1):
+        super(WaveFormerBlock, self).__init__()
+        self.norm1 = nn.LayerNorm(dim)
+        self.attn = RoPEMultiheadAttention(dim, num_heads, dropout)
+        self.norm2 = nn.LayerNorm(dim)
+
+        mlp_hidden_dim = int(dim * mlp_ratio)
+        self.mlp = nn.Sequential(
+            nn.Linear(dim, mlp_hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(mlp_hidden_dim, dim),
+            nn.Dropout(dropout)
+        )
+
+    def forward(self, x):
+        # Pre-norm architecture
+        x = x + self.attn(self.norm1(x))
+        x = x + self.mlp(self.norm2(x))
+        return x
+
+
+class WaveFormer(nn.Module):
+    """
+    WaveFormer for EMG時系列分類
+
+    Rotary Position Embedding + Patch-based Transformer
+    EPN-612データセットで95%精度を達成したアーキテクチャの簡略版
+
+    主な特徴:
+    - Patch Embedding: 時系列をパッチに分割
+    - RoPE: 回転位置エンコーディング
+    - Multi-head Attention: RoPE付き
+    - Classification Head: グローバルプーリング + MLP
+    """
+    def __init__(self,
+                 input_channels: int = 8,
+                 num_classes: int = 6,
+                 seq_len: int = 200,
+                 patch_size: int = 10,
+                 embed_dim: int = 128,
+                 depth: int = 6,
+                 num_heads: int = 8,
+                 mlp_ratio: float = 4.0,
+                 dropout: float = 0.2):
+        super(WaveFormer, self).__init__()
+
+        self.input_channels = input_channels
+        self.seq_len = seq_len
+        self.patch_size = patch_size
+        self.num_patches = seq_len // patch_size
+
+        # Patch embedding: Conv1d with kernel_size=patch_size, stride=patch_size
+        self.patch_embed = nn.Conv1d(input_channels, embed_dim,
+                                     kernel_size=patch_size, stride=patch_size)
+
+        # CLS token (learnable)
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+
+        # Transformer blocks with RoPE
+        self.blocks = nn.ModuleList([
+            WaveFormerBlock(embed_dim, num_heads, mlp_ratio, dropout)
+            for _ in range(depth)
+        ])
+
+        self.norm = nn.LayerNorm(embed_dim)
+
+        # Classification head
+        self.head = nn.Sequential(
+            nn.Linear(embed_dim, 256),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(256, 128),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(128, num_classes)
+        )
+
+        # Initialize weights
+        self._init_weights()
+
+    def _init_weights(self):
+        """Weight initialization"""
+        nn.init.trunc_normal_(self.cls_token, std=0.02)
+        self.apply(self._init_module_weights)
+
+    def _init_module_weights(self, m):
+        if isinstance(m, nn.Linear):
+            nn.init.trunc_normal_(m.weight, std=0.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+        elif isinstance(m, nn.Conv1d):
+            nn.init.kaiming_normal_(m.weight, mode='fan_out')
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        B = x.shape[0]
+
+        # Patch embedding
+        x = self.patch_embed(x)  # [B, embed_dim, num_patches]
+        x = x.transpose(1, 2)     # [B, num_patches, embed_dim]
+
+        # Prepend CLS token
+        cls_tokens = self.cls_token.expand(B, -1, -1)
+        x = torch.cat([cls_tokens, x], dim=1)  # [B, 1+num_patches, embed_dim]
+
+        # Transformer blocks with RoPE
+        for block in self.blocks:
+            x = block(x)
+
+        x = self.norm(x)
+
+        # Use CLS token for classification
+        cls_output = x[:, 0]
+
+        # Classification head
+        out = self.head(cls_output)
+
+        return out
+
+
 def get_model(model_type: str = 'cnn_lstm', **kwargs):
     """
     モデルを取得
 
     Args:
-        model_type: 'cnn_lstm', 'cnn', 'attention_lstm', 'attention_resnet18', 'transformer', or 'wavenet'
+        model_type: 'cnn_lstm', 'cnn', 'attention_lstm', 'attention_resnet18', 'transformer', 'wavenet', or 'waveformer'
         **kwargs: モデル固有のパラメータ
 
     Returns:
@@ -681,6 +897,8 @@ def get_model(model_type: str = 'cnn_lstm', **kwargs):
         return TransformerModel(**kwargs)
     elif model_type == 'wavenet':
         return WaveNet(**kwargs)
+    elif model_type == 'waveformer':
+        return WaveFormer(**kwargs)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
