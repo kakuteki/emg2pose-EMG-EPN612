@@ -21,6 +21,7 @@ from data.data_loader import EMGDataLoader, create_data_split
 from data.pytorch_dataset import create_dataloaders
 from features.feature_extractor import EMGPreprocessor
 from models.cnn_lstm import get_model
+from models.focal_loss import FocalLoss
 
 
 class Trainer:
@@ -28,7 +29,7 @@ class Trainer:
 
     def __init__(self, model, device, train_loader, val_loader, test_loader,
                  criterion, optimizer, scheduler=None, num_epochs=50,
-                 save_dir='results/deep_learning'):
+                 save_dir='results/deep_learning', exclude_pinch=False):
         self.model = model
         self.device = device
         self.train_loader = train_loader
@@ -49,8 +50,13 @@ class Trainer:
         self.val_accs = []
         self.best_val_acc = 0.0
 
-        self.class_names = ['No Gesture', 'Fist', 'Wave In',
-                           'Wave Out', 'Open', 'Pinch']
+        # Update class names based on whether Pinch is excluded
+        if exclude_pinch:
+            self.class_names = ['No Gesture', 'Fist', 'Wave In',
+                               'Wave Out', 'Open']
+        else:
+            self.class_names = ['No Gesture', 'Fist', 'Wave In',
+                               'Wave Out', 'Open', 'Pinch']
 
     def train_epoch(self, epoch):
         """Train for one epoch"""
@@ -295,10 +301,10 @@ def main(args):
     data_path = args.data_path
 
     train_loader_data = EMGDataLoader(data_path, dataset_type='training')
-    X_train_raw, y_train, _ = train_loader_data.load_dataset(max_users=args.max_users)
+    X_train_raw, y_train, _ = train_loader_data.load_dataset(max_users=args.max_users, exclude_pinch=args.exclude_pinch)
 
     test_loader_data = EMGDataLoader(data_path, dataset_type='testing')
-    X_test_raw, y_test, _ = test_loader_data.load_dataset(max_users=args.max_users)
+    X_test_raw, y_test, _ = test_loader_data.load_dataset(max_users=args.max_users, exclude_pinch=args.exclude_pinch)
 
     print(f"Training set: {X_train_raw.shape}")
     print(f"Test set: {X_test_raw.shape}")
@@ -334,10 +340,11 @@ def main(args):
     # 4. Create model
     # ===============================
     print("\n[Step 4/5] Creating model...")
+    num_classes = 5 if args.exclude_pinch else 6
     model = get_model(
         model_type=args.model_type,
         input_channels=8,
-        num_classes=6,
+        num_classes=num_classes,
         dropout=args.dropout
     ).to(device)
 
@@ -347,7 +354,12 @@ def main(args):
     class_weights = class_weights / class_weights.sum() * len(class_weights)
     class_weights = torch.FloatTensor(class_weights).to(device)
 
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    # Use Focal Loss if specified, otherwise use CrossEntropyLoss
+    if args.use_focal_loss:
+        print(f"Using Focal Loss with gamma={args.focal_gamma}")
+        criterion = FocalLoss(alpha=class_weights, gamma=args.focal_gamma)
+    else:
+        criterion = nn.CrossEntropyLoss(weight=class_weights)
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=5, factor=0.5)
 
@@ -365,7 +377,8 @@ def main(args):
         optimizer=optimizer,
         scheduler=scheduler,
         num_epochs=args.epochs,
-        save_dir=f'results/{args.model_type}'
+        save_dir=f'results/{args.model_type}',
+        exclude_pinch=args.exclude_pinch
     )
 
     trainer.train()
@@ -416,6 +429,16 @@ if __name__ == "__main__":
                        help='Learning rate')
     parser.add_argument('--weight_decay', type=float, default=1e-4,
                        help='Weight decay')
+
+    # Focal Loss
+    parser.add_argument('--use_focal_loss', action='store_true',
+                       help='Use Focal Loss instead of CrossEntropyLoss')
+    parser.add_argument('--focal_gamma', type=float, default=2.0,
+                       help='Gamma parameter for Focal Loss (default: 2.0)')
+
+    # Class Exclusion
+    parser.add_argument('--exclude_pinch', action='store_true',
+                       help='Exclude Pinch class (label=5) for 5-class classification')
 
     # Other
     parser.add_argument('--val_split', type=float, default=0.2,

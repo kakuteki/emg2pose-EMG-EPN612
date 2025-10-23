@@ -9,6 +9,7 @@ torchvision>=0.15.0
 
 # Data processing
 scipy>=1.7.0
+tsaug>=0.2.1
 
 # Visualization
 matplotlib>=3.4.0

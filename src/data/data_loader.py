@@ -122,12 +122,13 @@ class EMGDataLoader:
 
         return emg_signals, labels
 
-    def load_dataset(self, max_users: Optional[int] = None) -> Tuple[np.ndarray, np.ndarray, List[Dict]]:
+    def load_dataset(self, max_users: Optional[int] = None, exclude_pinch: bool = False) -> Tuple[np.ndarray, np.ndarray, List[Dict]]:
         """
         データセット全体を読み込む
 
         Args:
             max_users: 読み込む最大ユーザー数（Noneの場合は全ユーザー）
+            exclude_pinch: Pinchクラス（label=5）を除外するかどうか
 
         Returns:
             X: EMG信号 shape (num_samples, num_channels, sequence_length)
@@ -167,14 +168,25 @@ class EMGDataLoader:
         X = np.concatenate(all_emg_signals, axis=0)
         y = np.concatenate(all_labels, axis=0)
 
+        # Pinchクラスを除外する場合
+        if exclude_pinch:
+            mask = y != 5  # label=5 がPinch
+            X = X[mask]
+            y = y[mask]
+            print(f"\nExcluded Pinch class (label=5)")
+
         print(f"\nLoaded {len(user_folders)} users")
         print(f"Total samples: {len(X)}")
         print(f"Data shape: {X.shape}")
         print(f"Label distribution:")
-        for label in range(6):
+        max_label = 6 if not exclude_pinch else 5
+        for label in range(max_label):
+            if exclude_pinch and label == 5:
+                continue
             count = np.sum(y == label)
-            percentage = count / len(y) * 100
-            print(f"  {self.gesture_labels[label]} ({label}): {count} ({percentage:.1f}%)")
+            if count > 0:
+                percentage = count / len(y) * 100
+                print(f"  {self.gesture_labels[label]} ({label}): {count} ({percentage:.1f}%)")
 
         return X, y, all_user_info
 
