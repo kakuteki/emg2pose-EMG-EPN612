@@ -368,12 +368,138 @@ class AttentionResNet18(nn.Module):
         return output
 
 
+class PositionalEncoding(nn.Module):
+    """
+    位置エンコーディング（Transformer用）
+    """
+
+    def __init__(self, d_model: int, max_len: int = 5000, dropout: float = 0.1):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        # 位置エンコーディングを計算
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-torch.log(torch.tensor(10000.0)) / d_model))
+
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0)  # (1, max_len, d_model)
+
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        """
+        Args:
+            x: shape (batch_size, seq_len, d_model)
+        """
+        x = x + self.pe[:, :x.size(1), :]
+        return self.dropout(x)
+
+
+class TransformerModel(nn.Module):
+    """
+    Transformer Encoderモデル for EMG時系列分類
+
+    Multi-head self-attentionを使用して時系列パターンを学習
+    """
+
+    def __init__(self,
+                 input_channels: int = 8,
+                 num_classes: int = 6,
+                 d_model: int = 128,
+                 nhead: int = 8,
+                 num_encoder_layers: int = 4,
+                 dim_feedforward: int = 512,
+                 dropout: float = 0.5):
+        """
+        Args:
+            input_channels: 入力チャンネル数（EMGチャンネル数）
+            num_classes: 出力クラス数
+            d_model: Transformerの特徴次元
+            nhead: Multi-head attentionのヘッド数
+            num_encoder_layers: Encoderレイヤーの数
+            dim_feedforward: Feed-forwardネットワークの次元
+            dropout: ドロップアウト率
+        """
+        super(TransformerModel, self).__init__()
+
+        self.d_model = d_model
+
+        # 入力埋め込み層（チャンネル次元をd_modelに変換）
+        self.input_embedding = nn.Linear(input_channels, d_model)
+
+        # 位置エンコーディング
+        self.pos_encoder = PositionalEncoding(d_model, max_len=1000, dropout=dropout)
+
+        # Transformer Encoder
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            activation='relu',
+            batch_first=True  # (batch, seq, feature)の順序
+        )
+        self.transformer_encoder = nn.TransformerEncoder(
+            encoder_layer,
+            num_layers=num_encoder_layers
+        )
+
+        # グローバルプーリング（時系列次元を集約）
+        self.global_pool = nn.AdaptiveAvgPool1d(1)
+
+        # 分類層
+        self.classifier = nn.Sequential(
+            nn.Linear(d_model, 256),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(128, num_classes)
+        )
+
+    def forward(self, x):
+        """
+        Forward pass
+
+        Args:
+            x: shape (batch_size, channels, sequence_length)
+
+        Returns:
+            output: shape (batch_size, num_classes)
+        """
+        # Transpose: (batch, channels, seq) -> (batch, seq, channels)
+        x = x.transpose(1, 2)  # (batch, seq_len, channels)
+
+        # 入力埋め込み
+        x = self.input_embedding(x)  # (batch, seq_len, d_model)
+
+        # 位置エンコーディング
+        x = self.pos_encoder(x)
+
+        # Transformer Encoder
+        x = self.transformer_encoder(x)  # (batch, seq_len, d_model)
+
+        # グローバルプーリング
+        # Transpose: (batch, seq_len, d_model) -> (batch, d_model, seq_len)
+        x = x.transpose(1, 2)  # (batch, d_model, seq_len)
+        x = self.global_pool(x)  # (batch, d_model, 1)
+        x = x.squeeze(-1)  # (batch, d_model)
+
+        # 分類
+        x = self.classifier(x)
+
+        return x
+
+
 def get_model(model_type: str = 'cnn_lstm', **kwargs):
     """
     モデルを取得
 
     Args:
-        model_type: 'cnn_lstm', 'cnn', 'attention_lstm', or 'attention_resnet18'
+        model_type: 'cnn_lstm', 'cnn', 'attention_lstm', 'attention_resnet18', or 'transformer'
         **kwargs: モデル固有のパラメータ
 
     Returns:
@@ -387,6 +513,8 @@ def get_model(model_type: str = 'cnn_lstm', **kwargs):
         return AttentionLSTM(**kwargs)
     elif model_type == 'attention_resnet18':
         return AttentionResNet18(**kwargs)
+    elif model_type == 'transformer':
+        return TransformerModel(**kwargs)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
