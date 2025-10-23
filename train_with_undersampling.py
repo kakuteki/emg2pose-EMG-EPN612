@@ -257,7 +257,7 @@ class Trainer:
             if val_acc > self.best_val_acc:
                 self.best_val_acc = val_acc
                 torch.save(self.model.state_dict(), self.save_dir / 'best_model.pth')
-                print(f"  ✓ New best model saved! (Val Acc: {val_acc:.2f}%)")
+                print(f"  [*] New best model saved! (Val Acc: {val_acc:.2f}%)")
 
         print("\n" + "="*80)
         print("TRAINING COMPLETED")
