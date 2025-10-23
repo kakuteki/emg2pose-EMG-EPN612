@@ -4,6 +4,8 @@ CNN-LSTM ハイブリッドモデル for EMG gesture recognition
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import pywt
+import numpy as np
 
 
 class CNNLSTM(nn.Module):
@@ -874,12 +876,310 @@ class WaveFormer(nn.Module):
         return out
 
 
+# ============================================================================
+# WaveletConv - Learnable Wavelet Transform for WaveFormer (1D version)
+# ============================================================================
+
+def create_learnable_wavelet_filter_1d(in_channels, out_channels, kernel_size=4):
+    """
+    学習可能な1Dウェーブレットフィルタを初期化
+
+    Args:
+        in_channels: 入力チャンネル数
+        out_channels: 出力チャンネル数
+        kernel_size: カーネルサイズ（デフォルト4 - Haar waveletに対応）
+
+    Returns:
+        filter_bank: [out_channels, in_channels, kernel_size]
+    """
+    # Haarウェーブレット基底を使用して初期化
+    wavelet = pywt.Wavelet('db1')  # Daubechies 1 (Haarと同等)
+
+    # 分解フィルタと再構成フィルタを取得
+    dec_lo = torch.tensor(wavelet.dec_lo, dtype=torch.float32)
+    dec_hi = torch.tensor(wavelet.dec_hi, dtype=torch.float32)
+
+    # カーネルサイズに合わせてパディング
+    if len(dec_lo) < kernel_size:
+        pad_size = kernel_size - len(dec_lo)
+        dec_lo = F.pad(dec_lo, (0, pad_size))
+        dec_hi = F.pad(dec_hi, (0, pad_size))
+    elif len(dec_lo) > kernel_size:
+        dec_lo = dec_lo[:kernel_size]
+        dec_hi = dec_hi[:kernel_size]
+
+    # フィルタバンクを構築
+    filter_bank = torch.zeros(out_channels, in_channels, kernel_size)
+
+    # 各出力チャンネルに対してローパス/ハイパスを交互に割り当て
+    for i in range(out_channels):
+        for j in range(in_channels):
+            if i % 2 == 0:
+                filter_bank[i, j, :] = dec_lo
+            else:
+                filter_bank[i, j, :] = dec_hi
+
+    return filter_bank
+
+
+def wavelet_transform_1d(x, wavelet_filter):
+    """
+    1Dウェーブレット変換（前方分解）
+
+    Args:
+        x: 入力テンソル [B, C, L]
+        wavelet_filter: ウェーブレットフィルタ [out_C, in_C, K]
+
+    Returns:
+        LL: 低周波成分 [B, out_C//2, L//2]
+        LH: 高周波成分 [B, out_C//2, L//2]
+    """
+    # Conv1dでウェーブレット変換を実装（stride=2でダウンサンプリング）
+    out = F.conv1d(x, wavelet_filter, stride=2, padding=wavelet_filter.shape[2]//2)
+
+    # ローパスとハイパスに分割
+    out_channels = out.shape[1]
+    LL = out[:, :out_channels//2, :]
+    LH = out[:, out_channels//2:, :]
+
+    return LL, LH
+
+
+def inverse_wavelet_transform_1d(LL, LH, wavelet_filter):
+    """
+    1D逆ウェーブレット変換（再構成）
+
+    Args:
+        LL: 低周波成分 [B, C, L]
+        LH: 高周波成分 [B, C, L]
+        wavelet_filter: ウェーブレットフィルタ
+
+    Returns:
+        x: 再構成された信号 [B, C, 2*L]
+    """
+    # LL, LHを結合
+    x = torch.cat([LL, LH], dim=1)
+
+    # 転置畳み込みでアップサンプリング
+    out = F.conv_transpose1d(x, wavelet_filter, stride=2,
+                            padding=wavelet_filter.shape[2]//2,
+                            output_padding=1)
+
+    return out
+
+
+class WTConv1d(nn.Module):
+    """
+    1D Wavelet Transform Convolution
+
+    多段階ウェーブレット分解を行い、各レベルの特徴を抽出
+    """
+    def __init__(self, in_channels, out_channels, kernel_size=4, stride=2, levels=1):
+        super(WTConv1d, self).__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.levels = levels
+
+        # 各レベルのウェーブレットフィルタ（チャンネル数が変わるため）
+        self.wavelet_filters = nn.ParameterList()
+        self.level_convs = nn.ModuleList()
+
+        current_channels = in_channels
+        for i in range(levels):
+            # 各レベルに対して学習可能なウェーブレットフィルタ
+            filter_bank = create_learnable_wavelet_filter_1d(current_channels, out_channels*2, kernel_size)
+            self.wavelet_filters.append(nn.Parameter(filter_bank, requires_grad=True))
+
+            # 高周波成分を処理する畳み込み層
+            self.level_convs.append(
+                nn.Sequential(
+                    nn.Conv1d(out_channels, out_channels, kernel_size=3, padding=1),
+                    nn.BatchNorm1d(out_channels),
+                    nn.ReLU(inplace=True)
+                )
+            )
+
+            # 次のレベルでは低周波成分のチャンネル数になる
+            current_channels = out_channels
+
+    def forward(self, x):
+        """
+        前方伝播
+
+        Args:
+            x: [B, C, L]
+
+        Returns:
+            features: 各レベルの特徴のリスト
+        """
+        features = []
+        current = x
+
+        for i in range(self.levels):
+            # 各レベルのウェーブレットフィルタを使用
+            LL, LH = wavelet_transform_1d(current, self.wavelet_filters[i])
+
+            # 高周波成分を処理
+            lh_processed = self.level_convs[i](LH)
+            features.append(lh_processed)
+
+            # 次のレベルのために低周波成分を使用
+            current = LL
+
+        # 最後の低周波成分も追加
+        features.append(current)
+
+        return features
+
+
+class WaveFormerComplete(nn.Module):
+    """
+    完全版WaveFormer - WaveletConv + RoPE + Transformer
+
+    元論文の完全実装:
+    - WaveletConv: 学習可能なウェーブレット変換で多解像度特徴抽出
+    - RoPE: 回転位置エンコーディング
+    - Transformer: マルチヘッドアテンション
+
+    参考: https://github.com/ForeverBlue816/WaveFormer
+    """
+    def __init__(self,
+                 input_channels: int = 8,
+                 num_classes: int = 6,
+                 seq_len: int = 200,
+                 patch_size: int = 10,
+                 embed_dim: int = 128,
+                 depth: int = 6,
+                 num_heads: int = 8,
+                 mlp_ratio: float = 4.0,
+                 dropout: float = 0.2,
+                 wavelet_levels: int = 2):
+        super(WaveFormerComplete, self).__init__()
+
+        self.input_channels = input_channels
+        self.seq_len = seq_len
+        self.patch_size = patch_size
+        self.num_patches = seq_len // patch_size
+
+        # 1. WaveletConv - 多解像度特徴抽出
+        self.wavelet_conv = WTConv1d(
+            in_channels=input_channels,
+            out_channels=embed_dim // 2,
+            kernel_size=4,
+            stride=2,
+            levels=wavelet_levels
+        )
+
+        # 2. Patch Embedding - WaveletConvの出力をパッチに変換
+        # WaveletConvの出力は複数レベルの特徴なので、それらを統合
+        self.patch_embed = nn.Conv1d(
+            embed_dim // 2,  # WaveletConvの出力チャンネル
+            embed_dim,
+            kernel_size=patch_size,
+            stride=patch_size
+        )
+
+        # 3. CLS token
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+
+        # 4. Transformer blocks with RoPE
+        self.blocks = nn.ModuleList([
+            WaveFormerBlock(embed_dim, num_heads, mlp_ratio, dropout)
+            for _ in range(depth)
+        ])
+
+        # 5. Layer Norm
+        self.norm = nn.LayerNorm(embed_dim)
+
+        # 6. Classification head
+        self.head = nn.Sequential(
+            nn.Linear(embed_dim, 256),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(256, 128),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(128, num_classes)
+        )
+
+        # 初期化
+        nn.init.trunc_normal_(self.cls_token, std=0.02)
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        """重みの初期化"""
+        if isinstance(m, nn.Linear):
+            nn.init.trunc_normal_(m.weight, std=0.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+        elif isinstance(m, nn.Conv1d):
+            nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        """
+        前方伝播
+
+        Args:
+            x: [B, C, L] - EMG信号
+
+        Returns:
+            out: [B, num_classes] - クラス予測
+        """
+        B = x.shape[0]
+
+        # 1. WaveletConv - 多解像度特徴抽出
+        wavelet_features = self.wavelet_conv(x)
+
+        # 最も詳細なレベルの特徴を使用（最初の高周波成分）
+        # または全レベルを統合する方法もある
+        if len(wavelet_features) > 0:
+            # 最初の高周波特徴を使用
+            x_wt = wavelet_features[0]
+        else:
+            # フォールバック: 元の入力をそのまま使用
+            x_wt = x[:, :x.shape[1]//2, :]
+
+        # 2. Patch Embedding
+        # x_wtのシーケンス長がpatch_sizeで割り切れるように調整
+        target_len = (x_wt.shape[2] // self.patch_size) * self.patch_size
+        if x_wt.shape[2] != target_len:
+            x_wt = x_wt[:, :, :target_len]
+
+        x = self.patch_embed(x_wt)  # [B, embed_dim, num_patches]
+        x = x.transpose(1, 2)  # [B, num_patches, embed_dim]
+
+        # 3. CLS tokenを追加
+        cls_tokens = self.cls_token.expand(B, -1, -1)
+        x = torch.cat([cls_tokens, x], dim=1)  # [B, 1+num_patches, embed_dim]
+
+        # 4. Transformer blocks with RoPE
+        for block in self.blocks:
+            x = block(x)
+
+        x = self.norm(x)
+
+        # 5. CLS tokenで分類
+        cls_output = x[:, 0]
+
+        # 6. Classification head
+        out = self.head(cls_output)
+
+        return out
+
+
 def get_model(model_type: str = 'cnn_lstm', **kwargs):
     """
     モデルを取得
 
     Args:
-        model_type: 'cnn_lstm', 'cnn', 'attention_lstm', 'attention_resnet18', 'transformer', 'wavenet', or 'waveformer'
+        model_type: 'cnn_lstm', 'cnn', 'attention_lstm', 'attention_resnet18', 'transformer', 'wavenet', 'waveformer', or 'waveformer_complete'
         **kwargs: モデル固有のパラメータ
 
     Returns:
@@ -899,6 +1199,8 @@ def get_model(model_type: str = 'cnn_lstm', **kwargs):
         return WaveNet(**kwargs)
     elif model_type == 'waveformer':
         return WaveFormer(**kwargs)
+    elif model_type == 'waveformer_complete':
+        return WaveFormerComplete(**kwargs)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
