@@ -159,6 +159,11 @@ class IntegratedTrainer:
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.gradient_clip)
 
             self.optimizer.step()
+
+            # Step OneCycleLR scheduler after each batch
+            if self.scheduler and isinstance(self.scheduler, optim.lr_scheduler.OneCycleLR):
+                self.scheduler.step()
+
             running_loss += loss.item()
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
@@ -204,22 +209,31 @@ class IntegratedTrainer:
             self.val_losses.append(val_loss)
             self.val_accs.append(val_acc)
 
-            if self.scheduler:
+            # Step scheduler (except OneCycleLR which is stepped per batch)
+            if self.scheduler and not isinstance(self.scheduler, optim.lr_scheduler.OneCycleLR):
                 lr = self.scheduler.step()
+                if lr is None:  # PyTorch built-in schedulers return None
+                    lr = self.optimizer.param_groups[0]['lr']
                 self.learning_rates.append(lr)
+            elif self.scheduler:  # OneCycleLR
+                lr = self.optimizer.param_groups[0]['lr']
+                self.learning_rates.append(lr)
+
+            # Get current learning rate
+            current_lr = self.optimizer.param_groups[0]['lr'] if self.scheduler else None
 
             self.writer.add_scalar('Loss/train', train_loss, epoch)
             self.writer.add_scalar('Loss/val', val_loss, epoch)
             self.writer.add_scalar('Accuracy/train', train_acc, epoch)
             self.writer.add_scalar('Accuracy/val', val_acc, epoch)
-            if self.scheduler:
-                self.writer.add_scalar('LearningRate', lr, epoch)
+            if self.scheduler and current_lr is not None:
+                self.writer.add_scalar('LearningRate', current_lr, epoch)
 
             print(f"\nEpoch {epoch+1}/{self.num_epochs}:")
             print(f"  Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%")
             print(f"  Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%")
-            if self.scheduler:
-                print(f"  Learning Rate: {lr:.6f}")
+            if self.scheduler and current_lr is not None:
+                print(f"  Learning Rate: {current_lr:.6f}")
 
             if val_acc > self.best_val_acc:
                 self.best_val_acc = val_acc
@@ -324,9 +338,9 @@ class IntegratedTrainer:
 def main(args):
     """Main training function"""
     print("="*80 + "\nEMG Gesture Recognition - Integrated Training (Trial 13)\n" + "="*80)
-    print(f"\nConfiguration:\n  Model: {args.model_type}\n  Focal Loss: {args.use_focal_loss}")
-    print(f"  Resampling: {args.use_resampling}\n  Augmentation: {args.use_augmentation}")
-    print(f"  Two-Stage: {args.two_stage}\n  Exclude Pinch: {args.exclude_pinch}\n" + "="*80)
+    print(f"\nConfiguration:\n  Model: {args.model_type}\n  Focal Loss: {not args.no_focal_loss}")
+    print(f"  Resampling: {not args.no_resampling}\n  Augmentation: {not args.no_augmentation}")
+    print(f"  Two-Stage: {not args.no_two_stage}\n  Exclude Pinch: {args.exclude_pinch}\n" + "="*80)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"\nUsing device: {device}")
@@ -356,6 +370,34 @@ def main(args):
     X_test_preprocessed = preprocessor.preprocess(X_test_raw, apply_bandpass=True, apply_notch=True, normalize=True)
     X_train, X_val, y_train_split, y_val = create_data_split(X_train_preprocessed, y_train, test_size=args.val_split, random_state=args.random_state)
 
+    # Apply undersampling to majority class if requested
+    if args.undersample_majority > 0:
+        print(f"\n[Undersampling] Reducing No Gesture class to {args.undersample_majority} samples...")
+        no_gesture_mask = y_train_split == 0
+        other_mask = y_train_split != 0
+
+        no_gesture_indices = np.where(no_gesture_mask)[0]
+        other_indices = np.where(other_mask)[0]
+
+        # Randomly sample from No Gesture class
+        np.random.seed(args.random_state)
+        if len(no_gesture_indices) > args.undersample_majority:
+            selected_no_gesture = np.random.choice(no_gesture_indices, size=args.undersample_majority, replace=False)
+        else:
+            selected_no_gesture = no_gesture_indices
+
+        # Combine indices
+        final_indices = np.concatenate([selected_no_gesture, other_indices])
+        np.random.shuffle(final_indices)
+
+        X_train = X_train[final_indices]
+        y_train_split = y_train_split[final_indices]
+
+        print(f"After undersampling - Train: {X_train.shape[0]} samples")
+        unique, counts = np.unique(y_train_split, return_counts=True)
+        for cls, count in zip(unique, counts):
+            print(f"  Class {int(cls)}: {count} samples ({count/len(y_train_split)*100:.1f}%)")
+
     # Create model
     print("\n[Step 3/6] Creating model...")
     num_classes = 5 if args.exclude_pinch else 6
@@ -363,14 +405,14 @@ def main(args):
     print(f"Model: {args.model_type}, Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     # Apply Resampling (SMOTE + Under-sampling)
-    if args.use_resampling:
+    if not args.no_resampling:
         print("\n[Step 4/6] Applying SMOTE + Under-sampling...")
         X_train, y_train_split = apply_resampling(X_train, y_train_split)
         print(f"Resampled train data shape: {X_train.shape}")
 
     # Data Augmentation
-    augmenter = DataAugmenter(enable=args.use_augmentation)
-    if args.use_augmentation:
+    augmenter = DataAugmenter(enable=not args.no_augmentation)
+    if not args.no_augmentation:
         print("\n[Step 5/6] Data augmentation enabled")
 
     # Create data loaders
@@ -384,20 +426,53 @@ def main(args):
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
+    # Calculate class weights if enabled
+    class_weights = None
+    if args.use_class_weights:
+        from sklearn.utils.class_weight import compute_class_weight
+        classes = np.unique(y_train_split)
+        weights = compute_class_weight('balanced', classes=classes, y=y_train_split)
+        # Cap maximum weight to prevent extreme values
+        max_weight = 10.0
+        weights = np.clip(weights, None, max_weight)
+        class_weights = torch.FloatTensor(weights).to(device)
+        print(f"\nClass weights enabled (max weight capped at {max_weight}):")
+        for i, (cls, weight) in enumerate(zip(classes, weights)):
+            print(f"  Class {int(cls)}: {weight:.4f}")
+
     # Setup criterion (Focal Loss or CrossEntropy)
-    if args.use_focal_loss:
-        criterion = FocalLoss(gamma=args.focal_gamma)
+    if not args.no_focal_loss:
+        criterion = FocalLoss(alpha=class_weights, gamma=args.focal_gamma)
         print(f"Using Focal Loss (gamma={args.focal_gamma})")
     else:
-        criterion = nn.CrossEntropyLoss()
+        criterion = nn.CrossEntropyLoss(weight=class_weights)
         print("Using CrossEntropy Loss")
 
     # Setup optimizer
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     # Setup learning rate scheduler
-    scheduler = WarmupCosineAnnealingLR(optimizer, warmup_epochs=args.warmup_epochs,
-                                       max_epochs=args.epochs, eta_min=1e-6)
+    if args.lr_scheduler == 'warmup_cosine':
+        scheduler = WarmupCosineAnnealingLR(optimizer, warmup_epochs=args.warmup_epochs,
+                                           max_epochs=args.epochs, eta_min=1e-6)
+        print(f"Using WarmupCosineAnnealing scheduler (warmup_epochs={args.warmup_epochs})")
+    elif args.lr_scheduler == 'cosine':
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
+        print(f"Using CosineAnnealing scheduler (T_max={args.epochs})")
+    elif args.lr_scheduler == 'step':
+        scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=args.epochs//3, gamma=0.1)
+        print(f"Using StepLR scheduler (step_size={args.epochs//3}, gamma=0.1)")
+    elif args.lr_scheduler == 'exponential':
+        scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.95)
+        print("Using ExponentialLR scheduler (gamma=0.95)")
+    elif args.lr_scheduler == 'onecycle':
+        steps_per_epoch = len(train_loader)
+        scheduler = optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.lr*10,
+                                                  epochs=args.epochs, steps_per_epoch=steps_per_epoch)
+        print(f"Using OneCycleLR scheduler (max_lr={args.lr*10}, steps_per_epoch={steps_per_epoch})")
+    else:
+        scheduler = None
+        print("No learning rate scheduler")
 
     # Setup trainer
     save_dir = args.save_dir if hasattr(args, 'save_dir') else f'results/{args.model_type}'
@@ -437,10 +512,11 @@ def main(args):
         'test_acc': float(test_acc * 100),
         'num_classes': num_classes,
         'exclude_pinch': args.exclude_pinch,
-        'use_focal_loss': args.use_focal_loss,
-        'use_resampling': args.use_resampling,
-        'use_augmentation': args.use_augmentation,
-        'two_stage': args.two_stage
+        'use_focal_loss': not args.no_focal_loss,
+        'use_class_weights': args.use_class_weights,
+        'use_resampling': not args.no_resampling,
+        'use_augmentation': not args.no_augmentation,
+        'two_stage': not args.no_two_stage
     }
 
     import json
@@ -463,11 +539,13 @@ if __name__ == "__main__":
                                'transformer', 'wavenet', 'waveformer', 'waveformer_complete'],
                        help='Model type')
     parser.add_argument('--dropout', type=float, default=0.3, help='Dropout')
-    parser.add_argument('--use_focal_loss', type=bool, default=True, help='Use Focal Loss')
+    parser.add_argument('--no_focal_loss', action='store_true', help='Disable Focal Loss')
     parser.add_argument('--focal_gamma', type=float, default=2.0, help='Focal gamma')
-    parser.add_argument('--use_resampling', type=bool, default=True, help='SMOTE + Under-sampling')
-    parser.add_argument('--use_augmentation', type=bool, default=True, help='Data augmentation')
-    parser.add_argument('--two_stage', type=bool, default=True, help='Two-stage training')
+    parser.add_argument('--use_class_weights', action='store_true', help='Enable class weights for imbalanced data')
+    parser.add_argument('--no_resampling', action='store_true', help='Disable SMOTE + Under-sampling')
+    parser.add_argument('--undersample_majority', type=int, default=0, help='Undersample majority class (No Gesture) to this many samples (0=disable)')
+    parser.add_argument('--no_augmentation', action='store_true', help='Disable data augmentation')
+    parser.add_argument('--no_two_stage', action='store_true', help='Disable two-stage training')
     parser.add_argument('--epochs', type=int, default=100, help='Epochs')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
@@ -478,6 +556,11 @@ if __name__ == "__main__":
     parser.add_argument('--num_workers', type=int, default=0, help='Workers')
     parser.add_argument('--random_state', type=int, default=42, help='Random state')
     parser.add_argument('--save_dir', type=str, default='results/integrated', help='Save directory')
+    parser.add_argument('--lr_scheduler', type=str, default='warmup_cosine',
+                       choices=['warmup_cosine', 'cosine', 'step', 'exponential', 'onecycle'],
+                       help='Learning rate scheduler type')
+    parser.add_argument('--use_mixup', action='store_true', help='Enable Mixup augmentation')
+    parser.add_argument('--mixup_alpha', type=float, default=0.2, help='Mixup alpha parameter')
 
     args = parser.parse_args()
     main(args)
