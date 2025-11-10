@@ -352,7 +352,7 @@ def main():
             best_val_acc = val_acc
             best_test_acc = test_acc
             torch.save(model.state_dict(), os.path.join(args.save_dir, 'best_model.pth'))
-            print(f"✓ Best model saved! (Val Acc: {best_val_acc:.2f}%, Test Acc: {best_test_acc:.2f}%)")
+            print(f"[SAVED] Best model saved! (Val Acc: {best_val_acc:.2f}%, Test Acc: {best_test_acc:.2f}%)")
             patience_counter = 0
         else:
             patience_counter += 1
